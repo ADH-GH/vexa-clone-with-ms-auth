@@ -1,0 +1,240 @@
+# release-images — build + publish the v0.12 image set, then hand off to release-validate
+# (release lane C2/C3). Split per #551: this workflow owns the EXPENSIVE, rarely-wrong half
+# (build + publish); release-validate.yml owns the CHEAP, iterated-on half (prove + promote).
+# A validate-harness fix re-runs release-validate alone (~minutes, dispatchable from any
+# branch) instead of rebuilding 10 unchanged images.
+#
+#   tag push v0.12.* (or workflow_dispatch with an explicit version) →
+#     preflight       secrets present (fail fast + loud) · tag ↔ package.json ↔ Chart.yaml
+#                     appVersion consistency · helm static gates · pinned-render assertions
+#     build (matrix)  the uniform images — buildx, amd64+arm64, registry :buildcache cache
+#     build-bot       vexaai/vexa-bot — special-cased: FROM the locally-built
+#                     vexa/meet-join-env:dev base, so it uses the classic docker driver
+#     validate        calls release-validate.yml (manifest verify · image-identity · validate
+#                     legs) with promote: FALSE — publish + prove only. This builds the versioned
+#                     :vX.Y.Z candidate so it can be WITNESSED; it never moves :v012. Promotion is
+#                     a separate, human-gated release-validate dispatch after the witness pass +
+#                     value acceptance (guarantee lines 7 + 8; ADR-0029).
+#
+# Constitutional guard: this chain NEVER moves vexaai/vexa-bot:dev or vexaai/vexa-bot:latest —
+# the 0.10 line publishes there and live 0.10 deployments pull them at spawn time. It also never
+# moves any :dev tag (dev = locally-built, by convention across the deploy stacks).
+#
+# Required repository secrets (Settings → Secrets and variables → Actions):
+#   DOCKERHUB_USERNAME — Docker Hub account with push rights to the vexaai org
+#   DOCKERHUB_TOKEN    — a Read & Write access token for that account
+# Missing secrets fail in preflight with a pointed message; no build job starts.
+# Docker Hub repos auto-created on first push (e.g. vexaai/v012-mcp) must be PUBLIC —
+# the validation legs and end users pull anonymously.
+name: release-images
+
+on:
+  push:
+    tags: ["v0.12.*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Image tag to build + publish (vX.Y.Z[-suffix], e.g. v0.12.0-rc.1). Base version must match Chart.yaml appVersion + package.json."
+        required: true
+        type: string
+      # No promote_latest here: this workflow never promotes (see the validate handoff, promote:false).
+      # Moving :v012 (and, by explicit ruling, :latest) is a separate release-validate dispatch that
+      # clears the witness + value gates and the release-promote Environment.
+
+concurrency:
+  group: release-images-${{ inputs.version || github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # ──────────────────────────────────────────────────────────────────────────────────────────
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - name: Docker Hub credentials present?
+        env:
+          DH_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+          DH_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -z "$DH_USER" ] || [ -z "$DH_TOKEN" ]; then
+            echo "::error title=Docker Hub secrets missing::release-images cannot publish. Create repository secrets DOCKERHUB_USERNAME (an account with push rights to the vexaai org) and DOCKERHUB_TOKEN (a Read & Write access token) under Settings → Secrets and variables → Actions, then re-run. Failing fast before any build starts."
+            exit 1
+          fi
+          echo "✓ Docker Hub credentials configured"
+
+      - uses: actions/checkout@v4
+
+      - name: Resolve + cross-check the release version
+        id: version
+        env:
+          VERSION_INPUT: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          VERSION="${VERSION_INPUT:-$GITHUB_REF_NAME}"
+          [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] \
+            || { echo "::error ::'$VERSION' is not a release version (want vX.Y.Z[-suffix])"; exit 1; }
+          BARE="${VERSION#v}"          # 0.12.0-rc.1
+          BASE="${BARE%%-*}"           # 0.12.0
+          PKG="$(node -p "require('./package.json').version")"
+          APPV="$(awk -F'"' '/^appVersion:/ {print $2}' deploy/helm/charts/vexa/Chart.yaml)"
+          [ "$BASE" = "$PKG" ]  || { echo "::error ::tag $VERSION vs package.json version $PKG — bump one of them"; exit 1; }
+          [ "$BASE" = "$APPV" ] || { echo "::error ::tag $VERSION vs Chart.yaml appVersion $APPV — bump one of them"; exit 1; }
+          if [ "$BARE" != "$BASE" ]; then PRE=true; else PRE=false; fi
+          { echo "version=$VERSION"; echo "prerelease=$PRE"; } >> "$GITHUB_OUTPUT"
+          echo "✓ releasing $VERSION (prerelease=$PRE; package.json=$PKG, appVersion=$APPV)"
+
+      - name: Helm static gates (lint + template assertions)
+        run: |
+          bash deploy/helm/tests/test_helm_lint.sh
+          bash deploy/helm/tests/test_template.sh
+
+      - name: Pinned render — every image ref follows global.imageTag
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          RENDER="$(helm template vexa deploy/helm/charts/vexa -n vexa \
+            -f deploy/helm/charts/vexa/values-test.yaml --set global.imageTag="$VERSION")"
+          N="$(grep -cE "image: \"vexaai/v012-[a-z-]+:$VERSION\"" <<<"$RENDER" || true)"
+          [ "$N" -ge 6 ] || { echo "::error ::expected >=6 v012 component images pinned to $VERSION, got $N"; exit 1; }
+          grep -q "vexaai/vexa-bot:$VERSION" <<<"$RENDER" \
+            || { echo "::error ::bot image (runtime BROWSER_IMAGE) does not follow global.imageTag"; exit 1; }
+          grep -q "vexaai/v012-agent-worker:$VERSION" <<<"$RENDER" \
+            || { echo "::error ::agent-worker image does not follow global.imageTag"; exit 1; }
+          if grep -nE 'vexaai/[a-z0-9-]+:dev' <<<"$RENDER"; then
+            echo "::error ::pinned render still references :dev images"; exit 1
+          fi
+          echo "✓ pinned render: $N component refs + bot + agent-worker at $VERSION, zero :dev"
+
+  # ──────────────────────────────────────────────────────────────────────────────────────────
+  build:
+    name: "build ${{ matrix.name }}"
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: admin-api
+            image: vexaai/v012-admin-api
+            context: core/identity/services/admin-api
+            dockerfile: core/identity/services/admin-api/Dockerfile
+          - name: runtime
+            image: vexaai/v012-runtime
+            context: core/runtime
+            dockerfile: core/runtime/Dockerfile
+          - name: agent-worker
+            image: vexaai/v012-agent-worker
+            context: .
+            dockerfile: core/agent/worker/Dockerfile
+          - name: agent-api
+            image: vexaai/v012-agent-api
+            context: .
+            dockerfile: core/agent/services/agent-api/Dockerfile
+          - name: meeting-api
+            image: vexaai/v012-meeting-api
+            context: .
+            dockerfile: core/meetings/services/meeting-api/Dockerfile
+          - name: gateway
+            image: vexaai/v012-gateway
+            context: core/gateway/services/gateway
+            dockerfile: core/gateway/services/gateway/Dockerfile
+          - name: mcp
+            image: vexaai/v012-mcp
+            context: core/meetings/services/mcp
+            dockerfile: core/meetings/services/mcp/Dockerfile
+          - name: terminal
+            image: vexaai/v012-terminal
+            context: clients/terminal
+            dockerfile: clients/terminal/Dockerfile
+          - name: lite
+            image: vexaai/vexa-lite
+            context: .
+            dockerfile: deploy/lite/Dockerfile.lite
+            free_disk: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free runner disk (large image)
+        if: matrix.free_disk == true
+        uses: jlumbroso/free-disk-space@v1.3.1
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ matrix.image }}:${{ needs.preflight.outputs.version }}
+          build-args: ${{ matrix.build_args }}
+          cache-from: type=registry,ref=${{ matrix.image }}:buildcache
+          cache-to: type=registry,ref=${{ matrix.image }}:buildcache,mode=max
+
+  # The bot builds FROM the locally-built vexa/meet-join-env:dev base image, which the buildx
+  # docker-container driver cannot see — so this job stays on the classic docker driver
+  # (BuildKit via DOCKER_BUILDKIT=1) where local images resolve, and uses inline cache instead
+  # of a :buildcache ref.
+  build-bot:
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      VERSION: ${{ needs.preflight.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free runner disk (the bot build needs ~10 GB of layers)
+        uses: jlumbroso/free-disk-space@v1.3.1
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Build the join-env base (vexa/meet-join-env:dev)
+        run: |
+          DOCKER_BUILDKIT=1 docker build \
+            -f core/meetings/modules/join/Dockerfile.env \
+            -t vexa/meet-join-env:dev \
+            core/meetings/modules/join
+      - name: Build + push vexaai/vexa-bot
+        run: |
+          # --cache-from tolerates the ref not existing yet (first release run).
+          DOCKER_BUILDKIT=1 docker build \
+            -f core/meetings/services/bot/Dockerfile \
+            --build-arg BUILDKIT_INLINE_CACHE=1 \
+            --cache-from "vexaai/vexa-bot:v012" \
+            -t "vexaai/vexa-bot:$VERSION" \
+            .
+          docker push "vexaai/vexa-bot:$VERSION"
+
+  # ──────────────────────────────────────────────────────────────────────────────────────────
+  # The other half (#551): manifest verify → image-identity ∥ validate legs. NO promote here.
+  # Re-runnable standalone via release-validate's own workflow_dispatch — from any branch,
+  # against this already-published version — when a validate-harness fix needs iterating.
+  #
+  # promote is DELIBERATELY not requested on the tag-push path (guarantee lines 7 + 8, the
+  # delivery constitution's ship bar: "publish and promote… neither happens before the witness
+  # pass is signed"). This job builds + publishes the versioned :vX.Y.Z images and proves them
+  # (L4), so the release candidate EXISTS to be witnessed — but it never moves :v012. Promotion
+  # is a separate, human-gated act: after the witness pass is signed (releases/<version>/
+  # witness.json) and every batch change is accepted (release-value-gate), a maintainer dispatches
+  # release-validate with promote:true, which then clears the witness-gate + value-gate and pauses
+  # on the `release-promote` Environment for the owner's approval before :v012 moves.
+  validate:
+    needs: [preflight, build, build-bot]
+    uses: ./.github/workflows/release-validate.yml
+    with:
+      version: ${{ needs.preflight.outputs.version }}
+      promote: false
+    secrets:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}

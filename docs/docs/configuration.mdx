@@ -1,0 +1,195 @@
+---
+title: "Configuration"
+description: "Every environment variable the stack reads — what it does and its default."
+---
+
+Vexa is configured by environment variables, set in `deploy/compose/.env` for Docker Compose (seeded
+from `.env.example` on first `make all`). Defaults below are what the stack falls back to when the
+variable is unset — fine for local evaluation, **not** for anything exposed.
+
+<Warning>
+Change every secret (`ADMIN_TOKEN`, `INTERNAL_API_SECRET`, DB and MinIO credentials,
+`VEXA_DISPATCH_SIGNING_KEY`, `NEXTAUTH_SECRET`) before putting the stack on a network. The defaults
+are public.
+</Warning>
+
+## Transcription (STT)
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `TRANSCRIPTION_SERVICE_URL` | — | STT service **base URL** (the client appends `/v1/audio/transcriptions`), e.g. `http://<gpu-host>:8083`. Point it at the bundled service you deploy separately (`deploy/transcription`) or a hosted endpoint. Unset → bots join and record but produce no transcript. |
+| `TRANSCRIPTION_SERVICE_TOKEN` | — | STT auth token — must match the `API_TOKEN` of your `deploy/transcription` unit, or a token from `vexa.ai/account`. |
+| `BOT_SPEAKER_MIN_AUDIO_SEC` | `2` | Google Meet minimum audio window before submitting to STT. Lower values reduce first-transcript latency but increase request frequency. |
+| `BOT_SPEAKER_SUBMIT_INTERVAL_SEC` | `2` | Google Meet speaker-stream submission interval. |
+| `BOT_SPEAKER_CONFIRM_THRESHOLD` | `2` | Consecutive matching STT results required to confirm a segment. `1` lowers latency but reduces LocalAgreement protection against corrections. |
+| `BOT_SPEAKER_MAX_BUFFER_SEC` | `30` | Maximum buffered Google Meet audio before a forced submission. |
+| `BOT_SPEAKER_IDLE_TIMEOUT_SEC` | `15` | Flush/reset timeout after a speaker stops producing audio. |
+
+The STT service is the **GPU workload, deployed separately** from this stack — see
+[Deployment → Transcription](/deployment#transcription-the-separate-gpu-unit). The main stack
+stays GPU-free and reaches it over the network via the two variables above.
+
+## Secrets & identity
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `ADMIN_TOKEN` | `changeme` | Admin API key (`X-Admin-API-Key`) — mints users and tokens. |
+| `INTERNAL_API_SECRET` | `vexa-internal-secret` | Shared secret for service-to-service calls. |
+| `VEXA_DISPATCH_SIGNING_KEY` | `dev-dispatch-signing-key` | Signs dispatch tokens (the identity chain of custody). |
+| `NEXTAUTH_SECRET` | `dev-nextauth-secret` | Session secret for the web UI. |
+| `VEXA_BOT_API_KEY` | — | Pre-shared key a bot uses to call back into the stack. |
+
+## Database & storage
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `DB_NAME` / `DB_USER` / `DB_PASSWORD` | `vexa` / `postgres` / `postgres` | Postgres credentials (metadata). |
+| `POSTGRES_HOST_PORT` | `5458` | Host port mapped to Postgres. |
+| `MINIO_ENDPOINT` | `minio:9000` | Object storage endpoint (recordings + workspaces). |
+| `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` | `vexa-access-key` / `vexa-secret-key` | MinIO credentials. |
+| `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` | `vexa-access-key` / `vexa-secret-key` | MinIO root credentials. |
+| `MINIO_BUCKET` | `vexa` | Bucket holding recordings and agent workspaces. |
+| `MINIO_SECURE` | `false` | Use TLS to reach MinIO. |
+
+## Agent inference (bring your own)
+
+Point the agent at your own model so no inference leaves the network.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `VEXA_AGENT_MODEL` | — | Model the agent runner uses. |
+| `VEXA_MEETING_MODEL` | — | Model for meeting-time processing. |
+| `ANTHROPIC_API_KEY` | — | Key for Anthropic-backed runners. |
+| `ANTHROPIC_MODEL` · `ANTHROPIC_DEFAULT_OPUS_MODEL` · `…_SONNET_MODEL` · `…_HAIKU_MODEL` | — | Per-tier model overrides. |
+| `HOST_CLAUDE_CREDENTIALS` | — | Host path to Claude credentials mounted into agent containers (see below). |
+| `VEXA_AGENT_DEFAULT_SUBJECT` | `u_live` | Fallback subject before the gateway fronts agent-api. |
+
+### Claude subscription credentials (`HOST_CLAUDE_CREDENTIALS`)
+
+Setting `HOST_CLAUDE_CREDENTIALS=~/.claude/.credentials.json` mounts your Claude Code
+sign-in into the agent containers (read-only), so the agent runs on your subscription
+instead of an API key. Whether that file stays valid depends on the host OS:
+
+- **Linux** (and **Windows via WSL2** — run the stack and the `claude` CLI inside WSL):
+  the file is Claude Code's own store; the CLI refreshes it in place. Nothing to do.
+- **macOS**: the CLI's source of truth is the login **Keychain** — the file is a one-time
+  export whose token expires every ~8–12 hours. Symptom: agent chat fails with
+  `401 Invalid authentication credentials` while `claude` works fine in your terminal.
+  Install the bundled sync daemon once:
+
+  ```bash
+  deploy/bin/claude-creds-sync/install.sh
+  ```
+
+  It registers a launchd user agent (`ai.vexa.claude-creds-sync`) that re-exports the
+  Keychain into the file every 5 minutes, write-only-on-change, preserving the inode the
+  containers mount. `install.sh uninstall` removes it. Details:
+  `deploy/bin/claude-creds-sync/README.md`.
+
+The credential-file mount is a single-developer convenience. For a portable setup that
+survives token rotation on any OS, configure an API key or a custom endpoint in
+**Settings → Models** (stored per-user/global in the database) — see the setup wizard or
+the table above.
+
+## Auto-join & calendar sync
+
+Timing knobs for the two meeting-api background sweeps ([auto-join](/core/meetings#auto-join--scheduled-means-the-bot-comes)
+and [calendar sync](/how-to/calendar-sync)). Both degrade gracefully: without `ADMIN_API_URL` +
+`INTERNAL_API_SECRET`, calendar sync no-ops and auto-join spawns without per-user context — the
+stack still boots.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `AUTO_JOIN_SWEEP_INTERVAL_S` | `30` | How often scheduled meetings are checked for a due start. |
+| `AUTO_JOIN_LEAD_S` | `60` | The bot is sent this many seconds *before* the scheduled time. |
+| `AUTO_JOIN_GRACE_S` | `600` | A meeting whose start passed longer ago than this is skipped — never joined hours late. |
+| `AUTO_JOIN_RETRY_BACKOFF_S` | `300` | Wait after a loud auto-join failure (cap/quota/spawn) before retrying that meeting. |
+| `CALENDAR_SYNC_INTERVAL_S` | `300` | How often connected ICS feeds are re-fetched and upserted. |
+| `ADMIN_API_URL` | — | admin-api base URL for the sweeps' internal lookups (spawn context, calendar configs). |
+
+## Images & runtime
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `IMAGE_TAG` | `dev` | Tag for the built service images. |
+| `BROWSER_IMAGE` | `vexaai/vexa-bot:v012` | Browser/bot container the runtime spawns per meeting. **Built from source** (`make bot`), spawned without pulling — the published `vexaai/vexa-bot:dev` is the old 0.10 line and is incompatible. |
+| `AGENT_IMAGE` / `AGENT_WORKER_IMAGE` | `vexaai/v012-agent-*` | Agent container the runtime spawns per dispatch. |
+| `DOCKER_GID` | `0` | Host docker group id, so the runtime can use the Docker socket. |
+| `LOG_LEVEL` | `info` | Log verbosity. |
+
+## Ports
+
+Host ports the compose stack publishes on `127.0.0.1` (override any of them in `.env`):
+
+| Variable | Default | Service |
+|---|---|---|
+| `API_GATEWAY_HOST_PORT` | `18056` | gateway (the one front door) |
+| `ADMIN_API_PORT` | `18057` | admin-api |
+| `MEETING_API_PORT` | `18080` | meeting-api |
+| `RUNTIME_API_PORT` | `18090` | runtime |
+| `AGENT_API_PORT` | `18100` | agent-api |
+| `TERMINAL_PORT` | `13000` | web UI / terminal |
+| `MINIO_HOST_PORT` / `MINIO_CONSOLE_HOST_PORT` | `9000` / `9001` | MinIO API / console |
+
+<Note>
+The gateway (`:18056`) is the one front door; the terminal web workbench is at `:13000`. The other host
+ports above are bound to `127.0.0.1` for local inspection and aren't needed for day-to-day use.
+</Note>
+
+## Gateway edge protection
+
+The gateway carries two independent abuse layers. Both are env-driven; both default sensibly for
+self-hosted and can be left untouched.
+
+### Per-user limiter (post-auth, on by default)
+
+A token-bucket limiter keyed by user id fires *after* the API key is resolved — it catches one token
+driving too much traffic. On for self-hosted by default.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `GATEWAY_RATE_LIMIT_DISABLED` | — | `1` / `true` / `yes` / `on` disables the per-user limiter entirely. |
+| `GATEWAY_RATE_LIMIT_BURST` | `120` | Bucket size (max burst). |
+| `GATEWAY_RATE_LIMIT_RPS` | `40` | Refill rate (tokens/sec). High enough for normal use; lower for stricter throttling. |
+
+### Edge guard (pre-auth, off by default for self-hosted)
+
+An optional fastapi-guard edge layer caps requests per **client IP** *before* the API key is validated
+— so an IP flooding invalid keys, or rotating many keys from one IP to defeat the per-user limiter, is
+answered with `429` at the edge and never reaches admin-api. An IP that keeps offending past a threshold
+is **auto-banned for a window**; sustained abuse costs the abuser, not the operator. Hosted runs this
+on; self-hosted defaults OFF. The code default is `GUARD_ENABLED=true`; the deploy surfaces set
+`GUARD_ENABLED=false` for self-hosted, so you opt in by overriding it.
+
+<Note>
+`GUARD_ENABLED=false` is the kill switch — flip it to `true` to turn the whole edge layer on. When
+behind a reverse proxy you must also set `GUARD_TRUSTED_PROXIES`, or every request keys to the proxy
+IP → one global bucket shared by all clients (one abuser throttles everyone). See
+[Deployment → Publishing behind a reverse proxy](/deployment#publishing-behind-a-reverse-proxy).
+</Note>
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `GUARD_ENABLED` | `true` (code) / `false` (self-hosted deploy) | Kill switch for the entire edge layer. |
+| `GUARD_ENABLE_REDIS` | `true` | Share rate/ban state across processes via the existing `REDIS_URL` (`false` → in-memory only, per-process). |
+| `GUARD_RATE_LIMIT_RPM` | `600` | Per-IP request cap per minute; `0` disables rate limiting. |
+| `GUARD_RATE_LIMIT_WINDOW` | `60` | Rate-limit window in seconds. |
+| `GUARD_AUTO_BAN_THRESHOLD` | `10` | Over-limit events from one IP before it is auto-banned. |
+| `GUARD_AUTO_BAN_DURATION` | `3600` | Auto-ban window in seconds; after expiry the offender gets a fresh budget. |
+| `GUARD_IP_WHITELIST` | — | CSV of IPs that bypass every guard check. |
+| `GUARD_IP_BLACKLIST` | — | CSV of IPs rejected on the first request (`403`). |
+| `GUARD_BLOCKED_COUNTRIES` | — | CSV of ISO country codes to block (geo, opt-in). |
+| `GUARD_BLOCK_CLOUD_PROVIDERS` | — | CSV of cloud providers to block (e.g. `aws,gcp`), opt-in. |
+| `GUARD_TRUSTED_PROXIES` | — | CSV of trusted proxy IPs whose `X-Forwarded-For` is honored for client-IP resolution. **Set this when behind a reverse proxy.** |
+| `GUARD_TRUST_X_FORWARDED_PROTO` | `false` | Trust `X-Forwarded-Proto` for scheme enforcement. |
+| `GUARD_REDIS_PREFIX` | `vexa:guard:` | Redis key namespace (avoids colliding with Vexa's own keys). |
+| `GUARD_WS_ENABLED` | `false` | Opt-in `/ws` connect guard. In-memory per-process — does **not** share ban/rate state with the Redis-backed HTTP layer, and under `uvicorn --workers N>1` each worker keeps an independent WS ban set. |
+
+<Note>
+With `GUARD_ENABLE_REDIS=false` AND `uvicorn --workers N>1`, the HTTP rate-limit buckets and auto-bans are also per-process: the effective limit becomes `N × GUARD_RATE_LIMIT_RPM` and bans do not propagate across workers (the WS per-process ceiling above applies to the WS path independently).
+</Note>
+
+The guard fails open (`fail_secure=false`): a guard-check bug or a redis outage returns the request to
+the app rather than taking the gateway down. Request-body WAF scanning is intentionally off — the
+gateway proxies arbitrary user text (chat, meeting `data`, transcript shares), so signature scanning
+would false-positive on legitimate content.

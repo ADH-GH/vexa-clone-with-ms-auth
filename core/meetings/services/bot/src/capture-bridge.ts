@@ -254,7 +254,7 @@ export async function startCaptureBridge(
   // ── Start the page-side capture (VexaBrowserUtils preferred; production inline fallback). ──
   // The body of this callback runs IN THE BROWSER (Playwright serializes it); DOM globals are
   // reached via globalThis (this file type-checks against the Node lib — no DOM types here).
-  await page.evaluate(async ({ isMixed, isJitsi, botName }) => {
+  await page.evaluate(async ({ isMixed, isJitsi, isTeams, botName }) => {
     const w = (globalThis as any) as Record<string, any>;
     if (isMixed) {
       // Zoom/Teams: installRemoteAudioHook (installed pre-nav) mirrors each remote WebRTC audio
@@ -288,6 +288,21 @@ export async function startCaptureBridge(
       };
       setupMix();
       w.__vexaMixRescan = (globalThis as any).setInterval(setupMix, 2000); // pick up late-arriving tracks
+      if (isTeams) {
+        // Flexcon: Teams contributes the WHO signal the mixed audio can't carry — the
+        // voice-level "blue-square" outline names the pyannote clusters ('dom-outline'
+        // hints), exactly like Jitsi's dominant-speaker block below. Upstream v0.12.4
+        // ships @vexa/teams-capture but never bundles/instantiates it, so Teams segments
+        // stayed seg_N (the namer's unattributed fallback) forever.
+        if (w.VexaBrowserUtils?.createTeamsSpeakers && !w.__vexaTeamsSpeakers) {
+          w.__vexaTeamsSpeakers = w.VexaBrowserUtils.createTeamsSpeakers({
+            selfName: botName,
+            log: (m: string) => w.logBot?.('[TeamsSpeakers] ' + m),
+            onSpeaking: (name: string, _id: string, isEnd: boolean, tMs: number) =>
+              w.__vexaSpeakerHint?.(name, tMs, isEnd),
+          });
+        }
+      }
       if (isJitsi) {
         // Jitsi contributes the WHO + chat signals the mixed audio can't carry:
         // dominant-speaker changes name the pyannote clusters ('dom-active' hints),
@@ -326,7 +341,7 @@ export async function startCaptureBridge(
       });
       await w.__vexaGmeetCapture.start();
     }
-  }, { isMixed: mixed, isJitsi: jitsi, botName: inv.botName }).catch((e) => {
+  }, { isMixed: mixed, isJitsi: jitsi, isTeams: inv.platform === 'teams', botName: inv.botName }).catch((e) => {
     console.error(`[bot] capture bridge: page-side start failed: ${String(e)}`); // L4: surfaces only on the VM
   });
 

@@ -53,6 +53,7 @@ const GMEET = moduleEntry('gmeet-capture');       // @vexa/gmeet-capture
 const MIXED = moduleEntry('mixed-capture-core');  // @vexa/mixed-capture-core
 const RECORD = moduleEntry('record-chunker');     // @vexa/record-chunker (MediaRecorder → recording.v1)
 const JITSI = moduleEntry('jitsi-capture');       // @vexa/jitsi-capture (dominant-speaker hints + chat)
+const TEAMS = moduleEntry('teams-capture');       // @vexa/teams-capture (voice-level outline hints + chat)
 
 // In-memory entry: import the bricks and hang them on window.VexaBrowserUtils with
 // the EXACT names capture-bridge.ts reaches for. esbuild bundles the relative
@@ -78,6 +79,10 @@ import {
   createJitsiChat,
   sendJitsiChatMessage,
 } from ${JSON.stringify(JITSI)};
+import {
+  createTeamsSpeakers,
+  createTeamsChat,
+} from ${JSON.stringify(TEAMS)};
 
 const VexaBrowserUtils = {
   // ── gmeet lane (per-participant capture + glow attribution) ──
@@ -96,6 +101,9 @@ const VexaBrowserUtils = {
   createJitsiSpeakers,       // capture-bridge.ts: w.VexaBrowserUtils.createJitsiSpeakers
   createJitsiChat,           // capture-bridge.ts: w.VexaBrowserUtils.createJitsiChat
   sendJitsiChatMessage,
+  // ── teams lane (voice-level "blue-square" naming hints + chat) ──
+  createTeamsSpeakers,       // capture-bridge.ts: w.VexaBrowserUtils.createTeamsSpeakers
+  createTeamsChat,
 };
 
 (globalThis).VexaBrowserUtils = VexaBrowserUtils;

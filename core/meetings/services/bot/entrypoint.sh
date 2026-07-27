@@ -23,6 +23,21 @@ done
 echo "[entrypoint] Starting fluxbox..."
 fluxbox >/tmp/fluxbox.log 2>&1 &
 
+# ── Flexcon: LOGIN MODE ───────────────────────────────────────────────────────
+# VEXA_MODE=login turns this worker image into the one-time session provisioner:
+# instead of running the bot, expose the X display over VNC/noVNC (:6080) and run
+# the Teams login harness (provisionLogin → push profile to S3/MinIO). A human
+# signs in as the service account (MFA and all); see flexcon-teams-auth/.
+if [ "${VEXA_MODE:-}" = "login" ]; then
+  echo "[entrypoint] LOGIN MODE — starting VNC (x11vnc :5900, noVNC :6080)..."
+  x11vnc -display "${DISPLAY}" -nopw -forever -shared -bg -rfbport 5900 >/tmp/x11vnc.log 2>&1 || true
+  websockify --web=/usr/share/novnc 6080 localhost:5900 >/tmp/novnc.log 2>&1 &
+  sleep 1
+  cd /app/core/meetings/services/bot || exit 1
+  echo "[entrypoint] Running login harness — open http://localhost:6080/vnc.html and sign in."
+  exec node /app/flexcon-teams-auth/login-teams.cjs
+fi
+
 echo "[entrypoint] Starting PulseAudio (no idle exit)..."
 pulseaudio --start --exit-idle-time=-1 --log-target=syslog 2>/dev/null || true
 sleep 1

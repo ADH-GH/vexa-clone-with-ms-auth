@@ -108,6 +108,7 @@ RUN export DEBIAN_FRONTEND=noninteractive \
        pulseaudio \
        fluxbox \
        socat \
+       unzip \
     && rm -rf /var/lib/apt/lists/*
 
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
@@ -138,6 +139,19 @@ ENV VEXA_HF_CACHE=/opt/hf-cache
 
 # Entrypoint: bring up Xvfb + PulseAudio (the env the browser/capture/speak path
 # expects), then run the worker. Boot → validate config → launch browser → join.
+# Flexcon: AWS CLI v2 — @vexa/remote-browser's s3Sync (authenticated-session restore in
+# capture-bridge.ts, and the VEXA_MODE=login provisioner's push) shells out to `aws s3 sync`.
+# Upstream v0.12.4 ships the code path but not the binary; without it an authenticated bot
+# silently starts with an EMPTY profile (anonymous join).
+RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/awscliv2.zip \
+    && unzip -q /tmp/awscliv2.zip -d /tmp \
+    && /tmp/aws/install \
+    && rm -rf /tmp/aws /tmp/awscliv2.zip \
+    && aws --version
+
+# Flexcon: the VEXA_MODE=login harness (see entrypoint.sh).
+COPY flexcon-teams-auth/login-teams.cjs /app/flexcon-teams-auth/login-teams.cjs
+
 COPY core/meetings/services/bot/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 

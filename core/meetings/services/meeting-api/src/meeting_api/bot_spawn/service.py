@@ -295,7 +295,13 @@ async def request_bot(
         recording_upload_url=f"{meeting_api_url}/internal/recordings/upload",
         # A human-in-the-loop dashboard join needs a forgiving lobby window so a late admit does not
         # fail the meeting; everyoneLeftTimeout matches the O6 config.
-        automatic_leave={"waitingRoomTimeout": 600000, "everyoneLeftTimeout": 900000},
+        automatic_leave={
+            # Flexcon: env-tunable — the bot's empty-room watcher (empty-room.ts) acts on
+            # everyoneLeftTimeout after its post-admission grace; upstream stamped a value
+            # nothing consumed. Defaults mirror upstream.
+            "waitingRoomTimeout": int(os.environ.get("VEXA_WAITING_ROOM_TIMEOUT_MS", "600000")),
+            "everyoneLeftTimeout": int(os.environ.get("VEXA_EVERYONE_LEFT_TIMEOUT_MS", "900000")),
+        },
     )
 
     # 5. Spawn over runtime.v1.

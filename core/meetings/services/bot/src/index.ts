@@ -28,6 +28,7 @@ import { createOrchestrator } from './orchestrator.js';
 import { createHttpLifecycleSink } from './adapters/lifecycle-http.js';
 import { createRedisTranscriptSink, redisClientFrom } from './adapters/transcript-redis.js';
 import { createRedisActsSource, redisActsClientFrom } from './adapters/acts-redis.js';
+import { withEmptyRoomWatcher } from './empty-room.js';
 import { createBrowserJoinDriver } from './join-driver.js';
 import { createBotPipeline, createLivePipeline, serr, type BotPipeline } from './pipeline.js';
 import { createBotRecordingSink } from './recording.js';
@@ -215,6 +216,12 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     // Voice: tee acts so `speak`/`speak_stop` reach the SpeakController (gated on voiceAgentEnabled).
     const speak = createSpeakController(session.page, inv);
     acts = teeActs(liveActs, voiceHandler(speak));
+    // Flexcon: the missing left_alone — a Teams bot leaves an emptied room via the same
+    // graceful acts 'leave' path a dashboard Stop takes. Arms only after admission + grace
+    // (an auto-joined bot arrives BEFORE the meeting starts); see empty-room.ts.
+    if (inv.platform === 'teams') {
+      acts = withEmptyRoomWatcher(acts, session.page, inv, (m) => console.log(`[bot] ${m}`));
+    }
   } catch (e) {
     console.error(`[bot] browser launch/capture wiring failed — falling back to clean terminal failed: ${String(e)}`);
     join = noBrowserJoinDriver(String(e));

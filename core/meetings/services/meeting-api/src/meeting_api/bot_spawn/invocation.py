@@ -170,6 +170,36 @@ def build_invocation(
         "internalSecret": internal_secret,
         "automaticLeave": automatic_leave,
     }
+    # Flexcon: authenticated Teams bots — an env-driven deployment default (no public API
+    # change). With VEXA_TEAMS_AUTHENTICATED=true, every Teams invocation carries the
+    # persistent-session fields the sealed invocation.v1 contract already defines; the bot
+    # (capture-bridge.ts) restores the signed-in profile from S3 before launch and joins as
+    # a known org user instead of an anonymous guest. S3 coords mirror this service's own
+    # MINIO_* env; the session itself is provisioned once via the bot image's VEXA_MODE=login.
+    if platform == "teams" and os.environ.get(
+        "VEXA_TEAMS_AUTHENTICATED", ""
+    ).lower() in ("1", "true", "yes"):
+        minio_endpoint = os.environ.get("MINIO_ENDPOINT", "minio:9000")
+        scheme = (
+            "https"
+            if os.environ.get("MINIO_SECURE", "false").lower() in ("1", "true", "yes")
+            else "http"
+        )
+        invocation.update(
+            {
+                "authenticated": True,
+                "userdataS3Path": os.environ.get(
+                    "VEXA_TEAMS_USERDATA_S3_PATH", "sessions/teams/automation"
+                ),
+                "s3Endpoint": minio_endpoint
+                if "://" in minio_endpoint
+                else f"{scheme}://{minio_endpoint}",
+                "s3Bucket": os.environ.get("MINIO_BUCKET", "vexa"),
+                "s3AccessKey": os.environ.get("MINIO_ACCESS_KEY"),
+                "s3SecretKey": os.environ.get("MINIO_SECRET_KEY"),
+            }
+        )
+
     invocation = {k: v for k, v in invocation.items() if v is not None}
     conforms_invocation(invocation)
     return invocation

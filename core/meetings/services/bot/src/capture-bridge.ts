@@ -111,7 +111,14 @@ export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
   // getAuthenticatedBrowserArgs() is the minimal clean set remote-browser uses for signed-in
   // joins; getJoinBrowserArgs() adds the fake-device / autoplay flags the join lane needs. The
   // join args win on conflict (later wins in Chromium arg parsing).
-  const args = [...getAuthenticatedBrowserArgs(), ...getJoinBrowserArgs()];
+  // Flexcon: --incognito (in the join args) discards the persistent context's cookies —
+  // the exact session an authenticated bot just restored from S3 (the remote-browser args
+  // header documents this trap). Anonymous bots keep it (clean slate per meeting); an
+  // authenticated bot must NOT run incognito or it silently degrades to the anonymous flow.
+  const joinArgs = inv.authenticated
+    ? getJoinBrowserArgs().filter((a) => a !== '--incognito')
+    : getJoinBrowserArgs();
+  const args = [...getAuthenticatedBrowserArgs(), ...joinArgs];
   const { context, page } = await launchPersistentBrowser({ dataDir, args });
 
   // Voice-agent gate the page reads to decide whether to keep the mic hot (production parity).

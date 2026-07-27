@@ -44,8 +44,10 @@ const timeoutMin = Number(process.env.LOGIN_TIMEOUT_MIN || 10);
     process.exit(1);
   }
 
-  console.log(`[login-teams] pushing authenticated profile → s3://${s3.s3Bucket}/${s3.userdataS3Path}`);
-  rb.s3Sync(rb.BROWSER_DATA_DIR, s3.userdataS3Path, s3, 'up', rb.BROWSER_CACHE_EXCLUDES);
+  console.log(`[login-teams] pushing authenticated profile → s3://${s3.s3Bucket}/${s3.userdataS3Path}/browser-data`);
+  // Use the official wrapper: it writes to `${userdataS3Path}/browser-data`, the SAME key
+  // syncBrowserDataFromS3 restores from at bot launch (raw s3Sync misses the suffix).
+  rb.syncBrowserDataToS3(s3);
   console.log('[login-teams] DONE. Spawn bots with authenticated:true + this userdataS3Path to restore it.');
   process.exit(0);
 })().catch((e) => { console.error('[login-teams] fatal:', e); process.exit(1); });

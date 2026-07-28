@@ -207,13 +207,17 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     // `completed` is immediate — a chat line has no draft phase.
     let chatSeq = 0;
     const handleChat = (sender: string, text: string): void => {
+      const body = String(text || '');
+      // Opening the chat panel (for /nobot) exposes the thread's HISTORY, incl. Teams system
+      // lines ("Meeting ended", "Recording started", "… joined"). Don't record those as segments.
+      if (/^\s*(Meeting ended|Call ended|Recording (started|stopped)|Besprechung beendet|Aufzeichnung|.* (joined|left|beigetreten|hat die Besprechung verlassen)\.?)\s*$/i.test(body.trim())) return;
       // Flexcon opt-out: anyone typing /nobot in the meeting chat evicts the bot.
-      if (/^\s*\/nobot\b/i.test(String(text || ''))) {
+      if (/^\s*\/nobot\b/i.test(body)) {
         console.log(`[bot] /nobot from "${sender}" — leaving meeting on request`);
         leaveRef.fire('nobot_command');
         return; // never record the command itself as a transcript segment
       }
-      publishChat(sender, text);
+      publishChat(sender, body);
     };
     const publishChat = (sender: string, text: string): void => {
       const nowMs = Date.now();

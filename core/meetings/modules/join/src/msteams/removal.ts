@@ -1,27 +1,27 @@
 import { Page } from "playwright";
 import { log } from "../_host";
-import { teamsRemovalIndicators } from "./selectors";
+// removal is now detected by DOM presence of the call controls, not text (see below).
 
-// Function to check if bot has been removed from the meeting
+// The in-meeting call controls — their PRESENCE in the DOM means "still in the meeting".
+const TEAMS_CALL_CONTROLS =
+  'button[id="hangup-button"], button[data-tid="hangup-main-btn"], button[aria-label="Leave"], button[aria-label="Verlassen"]';
+
+// Check if the bot has been removed from the meeting.
+//
+// DOM-PRESENCE based, NOT text based. The old text indicators ("Meeting ended",
+// "removed from this meeting", bare [role="alert"]) caused false-positive evictions:
+// a transient toast, and — once the /nobot chat panel was open — the chat thread's
+// HISTORY (accumulated "Meeting ended" system messages from prior calls) both matched.
+// The hangup control existing in the DOM is definitive and immune to page copy. We use
+// count() (not isVisible) so an auto-hidden/faded toolbar isn't misread as removed; the
+// 2-poll debounce in the monitor guards a transient re-render gap.
 export async function checkForTeamsRemoval(page: Page): Promise<boolean> {
   try {
-    // Check for removal indicators
-    for (const selector of teamsRemovalIndicators) {
-      try {
-        const element = await page.locator(selector).first();
-        if (await element.isVisible()) {
-          log(`🚨 Teams removal detected: Found removal indicator "${selector}"`);
-          return true;
-        }
-      } catch (e) {
-        // Continue checking other selectors
-        continue;
-      }
-    }
-    return false;
+    const controls = await page.locator(TEAMS_CALL_CONTROLS).count();
+    return controls === 0; // no call controls in the DOM ⇒ removed / meeting ended
   } catch (error: any) {
     log(`Error checking for Teams removal: ${error.message}`);
-    return false;
+    return false; // unknown → not removed (fail-safe)
   }
 }
 

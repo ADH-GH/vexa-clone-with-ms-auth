@@ -118,12 +118,13 @@ export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
   const joinArgs = inv.authenticated
     ? getJoinBrowserArgs().filter((a) => a !== '--incognito')
     : getJoinBrowserArgs();
-  // Flexcon: auto-deny permission prompts. Teams requests the Window-Management permission to pop the
-  // call into compact/multi-window mode; an unanswered prompt blocks the UI AND compact mode detaches
-  // the roster (breaking the empty-room head-count). Media is handled by the fake-device flags in the
-  // join args (--use-fake-ui-for-media-stream), not by this prompt path, so a receive-only bot loses
-  // nothing by denying. Belt-and-suspenders with the in-call-only chat selector above.
-  const args = [...getAuthenticatedBrowserArgs(), ...joinArgs, '--deny-permission-prompts'];
+  // Flexcon: compact-mode is prevented by the in-call-only chat selector (capture-bridge chat-open),
+  // which is the ROOT cause — the bot no longer navigates to the Chat app, so Teams never pops the
+  // call out and never requests Window-Management. Do NOT add --deny-permission-prompts here: it wins
+  // over the join lane's --use-fake-ui-for-media-stream and denies the AUDIO permission, so "Ensuring
+  // Computer audio is selected" throws NotAllowedError → the bot captures silence → STT returns 422 →
+  // zero transcript segments (verified: post-flag bots got NotAllowedError + 0 segs; pre-flag none).
+  const args = [...getAuthenticatedBrowserArgs(), ...joinArgs];
   const { context, page } = await launchPersistentBrowser({ dataDir, args });
 
   // Voice-agent gate the page reads to decide whether to keep the mic hot (production parity).

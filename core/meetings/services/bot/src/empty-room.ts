@@ -55,11 +55,11 @@ async function readRoom(page: Page): Promise<Reading> {
     cand.peopleText = peopleBtn ? digits(peopleBtn.textContent) : null;
     // b) roster panel header "In dieser Besprechung (N)" / "In this meeting (N)"
     try {
-      const hdr = Array.from(d.querySelectorAll('div,span,h1,h2,h3')).find((e: any) => {
+      const hdr: any = Array.from(d.querySelectorAll('div,span,h1,h2,h3') as any).find((e: any) => {
         const t = String(e.textContent || '');
         return t.length < 50 && /\((\d+)\)/.test(t) && /(Besprechung|meeting)/i.test(t);
       });
-      const m = hdr && String((hdr as any).textContent || '').match(/\((\d+)\)/);
+      const m: RegExpMatchArray | null = hdr ? String(hdr.textContent || '').match(/\((\d+)\)/) : null;
       cand.rosterHeader = m ? parseInt(m[1], 10) : null;
     } catch { cand.rosterHeader = null; }
     // c) roster list items (only when the People panel is open)

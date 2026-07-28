@@ -214,11 +214,16 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     // `completed` is immediate — a chat line has no draft phase.
     let chatSeq = 0;
     const sentByBot = new Set<string>();
+    // Opening the chat panel replays the thread HISTORY (recurring threads carry old
+    // /bot commands + old chat). Ignore everything until the backlog has flushed, so a
+    // historical /botpause can't self-trigger and old chat doesn't enter this transcript.
+    let commandsArmedAt = Number.MAX_SAFE_INTEGER;
     const reply = (msg: string): void => {
       sentByBot.add(msg);
       void sendTeamsChatMessage(sess.page, msg).catch(() => {});
     };
     const handleChat = (sender: string, text: string): void => {
+      if (Date.now() < commandsArmedAt) return;   // warmup: skip the initial history replay
       const line = String(text || '').trim();
       // Never act on / record the bot's OWN greeting + replies (read back from the open panel).
       if (sentByBot.has(line) || line === TEAMS_GREETING) return;
@@ -275,6 +280,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     // throwing into the orchestrator's leave-on-fail backstop (which would hang the bot up).
     pipeline = createLivePipeline({
       startCapture: async () => {
+        commandsArmedAt = Date.now() + 12_000;   // let the chat backlog flush before acting on commands
         const stop = await startCaptureBridge(sess.page, inv, bp, undefined, handleChat);  // returns the capture stop-fn
         if (inv.platform === 'teams') {                                        // greet + advertise commands
           sentByBot.add(TEAMS_GREETING);

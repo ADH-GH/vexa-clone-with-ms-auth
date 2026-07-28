@@ -33,7 +33,7 @@ export async function sendTeamsChatMessage(page: Page, text: string): Promise<bo
       const box = page.locator(sel).first();
       await box.waitFor({ state: 'visible', timeout: 3000 });
       await box.click();
-      await page.keyboard.type(text, { delay: 8 });   // key events — CKEditor needs real input
+      await page.keyboard.insertText(text);   // atomic paste-like insert — avoids the per-keystroke race that scrambled the umlaut text
       await page.keyboard.press('Enter');
       return true;
     } catch {

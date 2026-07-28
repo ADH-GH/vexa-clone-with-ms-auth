@@ -12,6 +12,24 @@ is to fold this back upstream so any Vexa deployment can be Microsoft-ready.
 - **Claude** — Anthropic, via [Claude Code](https://claude.com/claude-code) (Opus 4.8)
   Fork implementation, diagnosis, and the fixes below. Credited as co-author on the commits.
 
+## Changes & wins (short list)
+
+- ✅ **Authenticated Entra/Teams join** — bot joins as a signed-in org user, **no lobby**, works under
+  strict tenants that disable anonymous join (restores a session from S3).
+- ✅ **Session preserved** — strip `--incognito` for authenticated bots (it wiped the restored profile).
+- ✅ **Self-host auth path shippable** — AWS CLI + a `VEXA_MODE=login` VNC login entrypoint.
+- ✅ **Named speakers** — wired the Teams active-speaker detector that upstream shipped but never ran.
+- ✅ **Empty-room auto-leave** — `left_alone` implemented via Teams' "Waiting for others to join…"
+  stage banner (roster/audio signals go stale); leaves cleanly (hangup → exit 0).
+- ✅ **No false eviction** — removal now needs removal-specific wording + a DOM-presence check
+  (a bare `[role="alert"]` was matching every toast).
+- ✅ **No compact-mode drift** — in-call-only chat selector keeps the call on the full stage (a broad
+  selector was opening the Chat *app* and detaching the roster).
+- ✅ **Cleaner transcripts** — spoken-language allow-list (`de,en`) + hallucination phrase filter at the
+  STT egress, killing Whisper's silence artifacts (e.g. "Спасибо за просмотр!"); added a German `de.txt`.
+- ✅ **STT-path diagnostics** — per-call bytes/status/segments + pyannote-boundary logging.
+- ✅ **In-meeting chat commands + German greeting** — `/botstop` `/botpause` `/botresume` `/botstay`.
+
 ## What "Microsoft-ready" required (the upstream findings)
 
 1. **Authenticated Teams join branch** — `msteams/join.ts` had no signed-in path; the anonymous

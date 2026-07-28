@@ -30,12 +30,26 @@ export function startTeamsRemovalMonitor(page: Page, onRemoval?: () => void | Pr
   log("Starting periodic Teams removal monitoring...");
   let removalDetected = false;
 
+  // Require the indicator to PERSIST across consecutive polls before acting. A real
+  // removal screen stays up; a transient toast clears next tick. This is the second guard
+  // (after the removal-specific selectors) against false-positive evictions.
+  let consecutive = 0;
   const removalCheckInterval = setInterval(async () => {
     try {
       const isRemoved = await checkForTeamsRemoval(page);
-      if (isRemoved && !removalDetected) {
+      if (!isRemoved) {
+        if (consecutive > 0) log("Removal indicator cleared before confirmation — was transient, ignoring.");
+        consecutive = 0;
+        return;
+      }
+      consecutive += 1;
+      if (consecutive < 2) {
+        log(`Removal indicator seen (${consecutive}/2) — confirming on next poll before leaving...`);
+        return;
+      }
+      if (!removalDetected) {
         removalDetected = true; // Prevent duplicate detection
-        log("🚨 Teams removal detected from Node.js side. Initiating graceful shutdown...");
+        log("🚨 Teams removal CONFIRMED (2 consecutive polls). Initiating graceful shutdown...");
         clearInterval(removalCheckInterval);
 
         try {

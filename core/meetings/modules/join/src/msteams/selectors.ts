@@ -88,33 +88,39 @@ export const teamsRejectionIndicators: string[] = [
   'button[aria-label*="denied"]'
 ];
 
-// Teams removal/error state indicators
+// Teams removal indicators — MUST be removal-SPECIFIC.
+// A bare [role="alert"] / [role="alertdialog"] matched EVERY transient Teams toast
+// ("Recording started", "You're muted", "X joined"), causing false-positive evictions:
+// the bot left a LIVE meeting ~1.5s after joining. Only actual removal/ended wording counts
+// now (English + German, this tenant); alert containers qualify only when they carry it.
 export const teamsRemovalIndicators: string[] = [
-  // Strong removal/error messages
+  // English removal
   'text="You\'ve been removed from this meeting"',
   'text=You\'ve been removed from this meeting',
-  'text=You’ve been removed from this meeting', // typographic apostrophe (live Teams copy)
+  'text=You’ve been removed from this meeting',
   'text="You have been removed from this meeting"',
   'text=You have been removed from this meeting',
   'text="Removed from meeting"',
   'text=Removed from meeting',
-
-  // Error states
+  // German removal (this tenant)
+  'text=/Sie wurden aus (dieser|der) Besprechung entfernt/i',
+  'text=/Aus (dieser|der) Besprechung entfernt/i',
+  // Meeting/call ended (EN + DE)
   'text="Meeting ended"',
   'text=Meeting ended',
   'text="Call ended"',
   'text=Call ended',
-  'text="Connection lost"',
-  'text=Connection lost',
-  'text="Unable to connect"',
-  'text=Unable to connect',
-
-  // Generic error patterns
-  '[role="alert"]',
-  '[role="alertdialog"]',
-  '.error-message',
-  '.connection-error',
-  '.meeting-error'
+  'text=/Die Besprechung (wurde beendet|ist beendet)/i',
+  'text=/Besprechung beendet/i',
+  'text=/Anruf beendet/i',
+  // Alert containers — ONLY when they actually carry removal/ended wording
+  '[role="alert"]:has-text("removed")',
+  '[role="alert"]:has-text("entfernt")',
+  '[role="alert"]:has-text("ended")',
+  '[role="alert"]:has-text("beendet")',
+  '[role="alertdialog"]:has-text("removed")',
+  '[role="alertdialog"]:has-text("entfernt")',
+  '[role="alertdialog"]:has-text("beendet")',
 ];
 
 // Teams UI interaction selectors

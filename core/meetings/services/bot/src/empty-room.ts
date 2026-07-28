@@ -32,8 +32,9 @@ const DEFAULT_EVERYONE_LEFT_MS = 180_000; // if the invocation carries none
 
 interface Reading {
   admitted: boolean;
-  badgeCount: number | null;   // roster-button badge (participants incl. the bot)
-  liveTracks: number | null;   // live remote audio tracks (excl. the bot)
+  count: number | null;                  // best participant count (incl. bot) from the People/roster UI
+  liveTracks: number | null;             // live remote audio tracks — a POSITIVE 'not alone' signal only
+  cand: Record<string, number | null>;   // all count candidates, logged for selector calibration
 }
 
 async function readRoom(page: Page): Promise<Reading> {
@@ -41,20 +42,35 @@ async function readRoom(page: Page): Promise<Reading> {
     const d = (globalThis as any).document;
     const w = (globalThis as any);
     const admitted = !!d.querySelector('button[id="hangup-button"], button[data-tid="hangup-main-btn"], button[aria-label="Leave"]');
-    // s1: the People/roster button badge. Try the button's aria-label digits first,
-    // then any badge-ish descendant. null = not found (fail-safe).
-    let badgeCount: number | null = null;
-    const roster = d.querySelector('#roster-button, [data-tid="roster-button"], button[aria-label*="articipant"], button[aria-label*="eilnehmer"], button[aria-label*="ersonen"], button[aria-label*="eople"]');
-    if (roster) {
-      const fromLabel = String(roster.getAttribute('aria-label') || '').match(/\d+/);
-      if (fromLabel) badgeCount = parseInt(fromLabel[0], 10);
-      if (badgeCount === null) {
-        const badge = roster.querySelector('[class*="badge" i], [data-tid*="badge" i], [class*="toggle-number" i]');
-        const fromBadge = badge && String(badge.textContent || '').match(/\d+/);
-        if (fromBadge) badgeCount = parseInt(fromBadge[0], 10);
-      }
-    }
-    // s2: live remote audio tracks (the capture hook's stream mirror).
+    const digits = (v: any): number | null => {
+      const m = String(v ?? '').match(/\d+/);
+      return m ? parseInt(m[0], 10) : null;
+    };
+    // Several participant-count candidates (all logged for calibration). Teams' DOM shifts,
+    // so we try a few and pick the first that yields a number.
+    const cand: Record<string, number | null> = {};
+    // a) People/roster toolbar button — aria-label or text digits
+    const peopleBtn = d.querySelector('#people-button, #roster-button, [data-tid="people-menu-button"], [data-tid="roster-button"], [data-tid="people-button"], button[aria-label*="Personen"], button[aria-label*="People"], button[aria-label*="Teilnehmer"], button[aria-label*="articipant"]');
+    cand.peopleAria = peopleBtn ? digits(peopleBtn.getAttribute('aria-label')) : null;
+    cand.peopleText = peopleBtn ? digits(peopleBtn.textContent) : null;
+    // b) roster panel header "In dieser Besprechung (N)" / "In this meeting (N)"
+    try {
+      const hdr = Array.from(d.querySelectorAll('div,span,h1,h2,h3')).find((e: any) => {
+        const t = String(e.textContent || '');
+        return t.length < 50 && /\((\d+)\)/.test(t) && /(Besprechung|meeting)/i.test(t);
+      });
+      const m = hdr && String((hdr as any).textContent || '').match(/\((\d+)\)/);
+      cand.rosterHeader = m ? parseInt(m[1], 10) : null;
+    } catch { cand.rosterHeader = null; }
+    // c) roster list items (only when the People panel is open)
+    try {
+      const n = d.querySelectorAll('[data-tid="roster-section"] [role="listitem"], [role="tree"] [role="treeitem"]').length;
+      cand.rosterItems = n > 0 ? n : null;
+    } catch { cand.rosterItems = null; }
+
+    const count = cand.peopleAria ?? cand.rosterHeader ?? cand.peopleText ?? cand.rosterItems ?? null;
+
+    // live remote audio tracks — used ONLY to CONFIRM presence, never absence.
     let liveTracks: number | null = null;
     const streams = w.__vexaCapturedRemoteAudioStreams;
     if (Array.isArray(streams)) {
@@ -63,7 +79,7 @@ async function readRoom(page: Page): Promise<Reading> {
         catch { return false; }
       }).length;
     }
-    return { admitted, badgeCount, liveTracks };
+    return { admitted, count, liveTracks, cand };
   });
 }
 
@@ -97,13 +113,14 @@ export function withEmptyRoomWatcher(
             log(`[EmptyRoom] admitted — arming in ${Math.round(graceMs / 1000)}s (everyoneLeftTimeout=${Math.round(leaveAfterMs / 1000)}s)`);
           }
           const now = Date.now();
-          // Prefer the badge (definitive); fall back to live remote tracks; unknown → not alone.
-          const alone = r.badgeCount !== null ? r.badgeCount <= 1
-            : r.liveTracks !== null ? r.liveTracks === 0
+          // Fail-safe: a live remote audio track proves someone is here; an unreadable count
+          // NEVER means alone (a muted human emits no track) — only a real count<=1 does.
+          const alone = (r.liveTracks ?? 0) > 0 ? false
+            : r.count !== null ? r.count <= 1
             : false;
           if (now - lastLog > 60_000) {
             lastLog = now;
-            log(`[EmptyRoom] badge=${r.badgeCount ?? '?'} liveTracks=${r.liveTracks ?? '?'} alone=${alone} armed=${now >= admittedAt + graceMs} aloneFor=${aloneSince ? Math.round((now - aloneSince) / 1000) : 0}s`);
+            log(`[EmptyRoom] count=${r.count ?? '?'} cand=${JSON.stringify(r.cand)} liveTracks=${r.liveTracks ?? '?'} alone=${alone} armed=${now >= admittedAt + graceMs} aloneFor=${aloneSince ? Math.round((now - aloneSince) / 1000) : 0}s`);
           }
           if (now < admittedAt + graceMs) { aloneSince = 0; return; }  // grace: never leave early
           if (!alone) { aloneSince = 0; return; }
@@ -111,7 +128,7 @@ export function withEmptyRoomWatcher(
           if (now - aloneSince >= leaveAfterMs) {
             fired = true;
             clearInterval(timer);
-            log(`[EmptyRoom] alone for ${Math.round((now - aloneSince) / 1000)}s (badge=${r.badgeCount ?? '?'} liveTracks=${r.liveTracks ?? '?'}) — leaving (left_alone)`);
+            log(`[EmptyRoom] alone for ${Math.round((now - aloneSince) / 1000)}s (count=${r.count ?? '?'} liveTracks=${r.liveTracks ?? '?'}) — leaving (left_alone)`);
             void Promise.resolve(handler({ action: 'leave' } as Act)).catch((e) => log(`[EmptyRoom] leave act rejected: ${String(e)}`));
           }
         })();

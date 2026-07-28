@@ -20,6 +20,7 @@
  */
 import {
   createGmeetPipeline,
+  isHallucination,
   type TranscriptSink as LaneTranscriptSink,
   type TranscriptSegment as LaneSegment,
   type SpeakerStreamManagerConfig,
@@ -198,7 +199,31 @@ export function createTranscribe(inv: Invocation): Transcribe {
     apiToken: inv.transcriptionServiceToken,
   });
   const language = inv.language ?? undefined;
-  return (pcm, prompt) => client.transcribe(pcm, language, prompt);
+  // Flexcon: STT egress hygiene — a spoken-language allow-list + the known-phrase hallucination
+  // filter, applied once at the transcribe boundary (covers both lanes). Whisper auto-detects the
+  // language per chunk and, on a SILENT chunk, confidently emits a stock phrase in some language
+  // (the classic ru "Спасибо за просмотр!" / "Продолжение следует"). Dropping results whose detected
+  // language isn't one we speak removes that whole class; isHallucination catches the rest (incl.
+  // de/en "Vielen Dank" / "Thank you"). Allow-list source: env → invocation → default de,en; empty ⇒ off.
+  const allowed = ((process.env.VEXA_ALLOWED_LANGUAGES ?? (inv.allowedLanguages ?? []).join(',')) || 'de,en')
+    .split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+  const langAllowed = (lang?: string) => allowed.length === 0 || (lang ? allowed.includes(lang.toLowerCase()) : true);
+  return async (pcm, prompt) => {
+    const r = await client.transcribe(pcm, language, prompt);
+    if (!langAllowed(r.language)) {
+      console.log(`[STT-filter] dropped ${r.segments?.length ?? 0} seg(s): detected language "${r.language}" not in [${allowed.join(',')}]`);
+      return { ...r, text: '', segments: [] };
+    }
+    const segs = r.segments ?? [];
+    const kept = segs.filter((s) => !isHallucination((s.text || '').trim()));
+    if (kept.length < segs.length) {
+      console.log(`[STT-filter] dropped ${segs.length - kept.length} hallucination-phrase seg(s) (lang=${r.language})`);
+    }
+    const text = kept.length
+      ? kept.map((s) => (s.text || '').trim()).filter(Boolean).join(' ')
+      : (isHallucination((r.text || '').trim()) ? '' : r.text);
+    return { ...r, text, segments: kept };
+  };
 }
 
 /**

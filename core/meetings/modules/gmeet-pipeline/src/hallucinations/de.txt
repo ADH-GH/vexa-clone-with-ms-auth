@@ -1,0 +1,26 @@
+# German Whisper silence-hallucination phrases.
+# Matched EXACT + case-insensitive against a whole segment, so these only drop a segment that IS
+# entirely one of these artifacts — never real business-meeting speech that merely contains the words.
+# Source: the well-known German WhisperLive silence artifacts (ZDF/WDR/Amara subtitle credits +
+# YouTube-style outros). Keep to phrases that are NOT normal meeting content.
+Untertitel der Amara.org-Community
+Untertitelung der Amara.org-Community
+Untertitel im Auftrag des ZDF für funk, 2017
+Untertitelung des ZDF für funk, 2017
+Untertitel im Auftrag des ZDF für funk, 2016
+Untertitel im Auftrag des ZDF für funk, 2018
+Untertitel im Auftrag des ZDF, 2020
+Untertitel im Auftrag des ZDF, 2021
+Untertitelung im Auftrag des ZDF, 2021
+Untertitel von Stephanie Geiges
+Untertitel des ZDF, 2020
+Copyright WDR 2021
+Copyright WDR 2020
+Vielen Dank fürs Zuschauen.
+Vielen Dank für's Zuschauen.
+Vielen Dank fürs Zuschauen und bis zum nächsten Mal.
+Danke fürs Zuschauen.
+Danke fürs Zuschauen und bis zum nächsten Mal.
+Vielen Dank für's Zusehen.
+Bis zum nächsten Mal.
+Untertitel im Auftrag des ZDF für funk, 2020

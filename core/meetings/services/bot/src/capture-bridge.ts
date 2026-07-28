@@ -302,6 +302,24 @@ export async function startCaptureBridge(
               w.__vexaSpeakerHint?.(name, tMs, isEnd),
           });
         }
+        // Flexcon: chat reader for the /nobot opt-out. createTeamsChat only sees messages
+        // when the chat panel is OPEN, so open it once (if not already), then watch. Each
+        // message crosses to the Node side via __vexaChatMessage → the /nobot handler + a
+        // transcript `chat` segment (upstream bundles createTeamsChat but never wires Teams).
+        try {
+          const dd = (globalThis as any).document;
+          const paneOpen = dd.querySelector('[data-tid="chat-pane-list"], [data-tid="chatPaneMessageList"], [data-tid="message-pane-list-runway"]');
+          if (!paneOpen) {
+            const chatBtn = dd.querySelector('#chat-button, [data-tid="chat-button"], button[aria-label*="Chat"], button[aria-label*="Unterhaltung"], button[aria-label*="Besprechungschat"]');
+            if (chatBtn) { chatBtn.click(); w.logBot?.('[TeamsChat] opened chat panel'); }
+          }
+        } catch { /* panel open best-effort */ }
+        if (w.VexaBrowserUtils?.createTeamsChat && !w.__vexaTeamsChat) {
+          w.__vexaTeamsChat = w.VexaBrowserUtils.createTeamsChat({
+            log: (m: string) => w.logBot?.('[TeamsChat] ' + m),
+            onMessage: (m: { sender: string; text: string }) => w.__vexaChatMessage?.(m.sender, m.text),
+          });
+        }
       }
       if (isJitsi) {
         // Jitsi contributes the WHO + chat signals the mixed audio can't carry:

@@ -104,6 +104,25 @@ function deriveMaxActiveMs(inv: Invocation, env: NodeJS.ProcessEnv = process.env
  * wired here at the composition root. The orchestrator's `subscribe(handler)` registers its
  * handler; we fan the live source's messages to it plus `voice`.
  */
+/** Wrap an ActsSource so the composition root can inject a synthetic `leave` (e.g. the
+ *  /nobot chat opt-out) via `ref.fire(reason)`. Armed on subscribe (post-admission); the
+ *  synthetic leave rides the SAME path as a dashboard Stop and the empty-room watcher. */
+function withLeaveTrigger(source: ActsSource, ref: { fire: (reason: string) => void }, log: (m: string) => void): ActsSource {
+  return {
+    subscribe(handler) {
+      const unsub = source.subscribe(handler);
+      let fired = false;
+      ref.fire = (reason: string) => {
+        if (fired) return;
+        fired = true;
+        log(`leave trigger: ${reason}`);
+        void Promise.resolve(handler({ action: 'leave' } as Act)).catch((e) => log(`leave trigger rejected: ${String(e)}`));
+      };
+      return unsub;
+    },
+  };
+}
+
 function teeActs(source: ActsSource, voice: (act: Act) => void | Promise<void>): ActsSource {
   return {
     subscribe(handler) {
@@ -168,6 +187,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
   let pipeline: Pipeline;
   let botPipeline: BotPipeline | null = null;
   let acts: ActsSource = liveActs;
+  const leaveRef: { fire: (reason: string) => void } = { fire: () => {} };  // /nobot → leave
   const recording = inv.recordingEnabled ? createBotRecordingSink({ inv, log: (m) => console.log(`[bot] ${m}`) }) : undefined;
   const speakerStreamConfig = speakerStreamConfigFromEnv(env);
   if (speakerStreamConfig) console.log(`[bot] speaker-stream tuning enabled: ${JSON.stringify(speakerStreamConfig)}`);
@@ -186,6 +206,15 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     // speaker, the wall clock is the timing (epoch seconds, like the audio lanes), and
     // `completed` is immediate — a chat line has no draft phase.
     let chatSeq = 0;
+    const handleChat = (sender: string, text: string): void => {
+      // Flexcon opt-out: anyone typing /nobot in the meeting chat evicts the bot.
+      if (/^\s*\/nobot\b/i.test(String(text || ''))) {
+        console.log(`[bot] /nobot from "${sender}" — leaving meeting on request`);
+        leaveRef.fire('nobot_command');
+        return; // never record the command itself as a transcript segment
+      }
+      publishChat(sender, text);
+    };
     const publishChat = (sender: string, text: string): void => {
       const nowMs = Date.now();
       void transcript.publish({
@@ -206,7 +235,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     // each failure surfaces LOUD via onFault (console with a full-fidelity serr(e)) instead of
     // throwing into the orchestrator's leave-on-fail backstop (which would hang the bot up).
     pipeline = createLivePipeline({
-      startCapture: () => startCaptureBridge(sess.page, inv, bp, undefined, publishChat),   // on the live meeting page
+      startCapture: () => startCaptureBridge(sess.page, inv, bp, undefined, handleChat),   // on the live meeting page
       startRecording: rec ? () => startRecording(sess.page, inv, rec) : undefined,          // MediaRecorder → recording.v1
       engine: bp,
       onFault: (stage, e) => {
@@ -216,6 +245,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     // Voice: tee acts so `speak`/`speak_stop` reach the SpeakController (gated on voiceAgentEnabled).
     const speak = createSpeakController(session.page, inv);
     acts = teeActs(liveActs, voiceHandler(speak));
+    acts = withLeaveTrigger(acts, leaveRef, (m) => console.log(`[bot] ${m}`));
     // Flexcon: the missing left_alone — a Teams bot leaves an emptied room via the same
     // graceful acts 'leave' path a dashboard Stop takes. Arms only after admission + grace
     // (an auto-joined bot arrives BEFORE the meeting starts); see empty-room.ts.

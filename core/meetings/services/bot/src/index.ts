@@ -275,13 +275,14 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     // throwing into the orchestrator's leave-on-fail backstop (which would hang the bot up).
     pipeline = createLivePipeline({
       startCapture: async () => {
-        await startCaptureBridge(sess.page, inv, bp, undefined, handleChat);   // on the live meeting page
+        const stop = await startCaptureBridge(sess.page, inv, bp, undefined, handleChat);  // returns the capture stop-fn
         if (inv.platform === 'teams') {                                        // greet + advertise commands
           sentByBot.add(TEAMS_GREETING);
           void sendTeamsChatMessage(sess.page, TEAMS_GREETING)
             .then((ok) => console.log(`[bot] greeting ${ok ? 'sent' : 'NOT sent (compose box not found)'}`))
             .catch(() => {});
         }
+        return stop;
       },
       startRecording: rec ? () => startRecording(sess.page, inv, rec) : undefined,          // MediaRecorder → recording.v1
       engine: bp,

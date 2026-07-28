@@ -118,7 +118,12 @@ export async function launchBrowser(inv: Invocation): Promise<BrowserSession> {
   const joinArgs = inv.authenticated
     ? getJoinBrowserArgs().filter((a) => a !== '--incognito')
     : getJoinBrowserArgs();
-  const args = [...getAuthenticatedBrowserArgs(), ...joinArgs];
+  // Flexcon: auto-deny permission prompts. Teams requests the Window-Management permission to pop the
+  // call into compact/multi-window mode; an unanswered prompt blocks the UI AND compact mode detaches
+  // the roster (breaking the empty-room head-count). Media is handled by the fake-device flags in the
+  // join args (--use-fake-ui-for-media-stream), not by this prompt path, so a receive-only bot loses
+  // nothing by denying. Belt-and-suspenders with the in-call-only chat selector above.
+  const args = [...getAuthenticatedBrowserArgs(), ...joinArgs, '--deny-permission-prompts'];
   const { context, page } = await launchPersistentBrowser({ dataDir, args });
 
   // Voice-agent gate the page reads to decide whether to keep the mic hot (production parity).
@@ -310,7 +315,13 @@ export async function startCaptureBridge(
           const dd = (globalThis as any).document;
           const paneOpen = dd.querySelector('[data-tid="chat-pane-list"], [data-tid="chatPaneMessageList"], [data-tid="message-pane-list-runway"]');
           if (!paneOpen) {
-            const chatBtn = dd.querySelector('#chat-button, [data-tid="chat-button"], button[aria-label*="Chat"], button[aria-label*="Unterhaltung"], button[aria-label*="Besprechungschat"]');
+            // Flexcon: ONLY the in-call toolbar chat button. The broad `button[aria-label*="Chat"]`
+            // (and the ambiguous "Unterhaltung") also matches the LEFT-RAIL Chat *app* button; clicking
+            // that navigates the main window to the Chat app, which pops the call into COMPACT mode —
+            // detaching the roster so the empty-room head-count selectors read stale garbage and the bot
+            // never auto-leaves. `#chat-button`/`[data-tid="chat-button"]` and the meeting-scoped German
+            // label "Besprechungschat" are in-call-only, so the call stays on the full stage.
+            const chatBtn = dd.querySelector('#chat-button, [data-tid="chat-button"], button[aria-label*="Besprechungschat"]');
             if (chatBtn) { chatBtn.click(); w.logBot?.('[TeamsChat] opened chat panel'); }
           }
         } catch { /* panel open best-effort */ }

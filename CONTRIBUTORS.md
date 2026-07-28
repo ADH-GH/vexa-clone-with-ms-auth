@@ -29,6 +29,8 @@ is to fold this back upstream so any Vexa deployment can be Microsoft-ready.
   STT egress, killing Whisper's silence artifacts (e.g. "Спасибо за просмотр!"); added a German `de.txt`.
 - ✅ **STT-path diagnostics** — per-call bytes/status/segments + pyannote-boundary logging.
 - ✅ **In-meeting chat commands + German greeting** — `/botstop` `/botpause` `/botresume` `/botstay`.
+- ✅ **n8n post-processing handover** (Flexcon integration) — completed meetings land as rows in a data
+  table (dedupe/audit); on-prem chunked LLM summaries + mailer run downstream.
 
 ## What "Microsoft-ready" required (the upstream findings)
 

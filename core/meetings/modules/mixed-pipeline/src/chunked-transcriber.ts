@@ -391,6 +391,7 @@ export class ChunkedTranscriber {
    *  state stays single-threaded under the pump lock. */
   private handleBoundary(ev: BoundaryEvent): void {
     if (this.disposed) return;
+    this.log(`[ChunkedTranscriber] boundary ${ev.kind} @${Math.round(ev.tMs)}ms`);  // Flexcon diag: is pyannote emitting speech boundaries at all?
     switch (ev.kind) {
       case 'silence→speaker':
         this.openTurn(ev.tMs);

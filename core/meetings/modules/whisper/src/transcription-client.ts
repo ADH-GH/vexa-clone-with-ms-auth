@@ -115,6 +115,7 @@ export class TranscriptionClient {
    */
   async transcribe(audioData: Float32Array, language?: string, prompt?: string): Promise<TranscriptionResult> {
     const wavBuffer = this.float32ToWav(audioData);
+    log(`[STT] transcribe() ${audioData.length} samples → ${wavBuffer.length}B WAV${language ? ` lang=${language}` : ''}`);  // Flexcon diag
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
       try {
@@ -245,6 +246,7 @@ export class TranscriptionClient {
 
       if (!response.ok) {
         const errorText = await response.text().catch(() => 'Unable to read error response');
+        log(`[STT] POST ${body.length}B → HTTP ${response.status} NOT-OK: ${errorText.slice(0, 200)}`);  // Flexcon diag
         throw classifyHttp(response.status, errorText);   // typed fault (P5/P18), not a bare Error
       }
 
@@ -263,6 +265,7 @@ export class TranscriptionClient {
       // rebuild the text from what survives, so phantoms never reach the pipeline.
       // If the model returned no segments we can't score, so keep its text as-is.
       const segments = allSegments.filter((s: any) => !isLowConfidenceSegment(s));
+      log(`[STT] POST ${body.length}B → HTTP 200: ${allSegments.length} raw seg(s), text="${String(data.text || '').slice(0, 60)}"`);  // Flexcon diag
       const text = allSegments.length
         ? segments.map((s: any) => (s.text || '').trim()).filter(Boolean).join(' ')
         : (data.text || '');

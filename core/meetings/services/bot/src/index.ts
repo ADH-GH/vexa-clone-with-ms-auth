@@ -29,6 +29,7 @@ import { createHttpLifecycleSink } from './adapters/lifecycle-http.js';
 import { createRedisTranscriptSink, redisClientFrom } from './adapters/transcript-redis.js';
 import { createRedisActsSource, redisActsClientFrom } from './adapters/acts-redis.js';
 import { withEmptyRoomWatcher } from './empty-room.js';
+import { sendTeamsChatMessage, TEAMS_GREETING } from './commands.js';
 import { createBrowserJoinDriver } from './join-driver.js';
 import { createBotPipeline, createLivePipeline, serr, type BotPipeline } from './pipeline.js';
 import { createBotRecordingSink } from './recording.js';
@@ -177,6 +178,12 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
   const transcript: TranscriptSink = createRedisTranscriptSink({
     client: transcriptClient, meetingId, nativeMeetingId: inv.nativeMeetingId,
   });
+  // Flexcon command state: /botpause gates transcript output; /botstay disables auto-leave.
+  const pauseRef = { paused: false };
+  const stayRef = { stay: false };
+  const gatedTranscript: TranscriptSink = {
+    publish: (seg) => (pauseRef.paused ? Promise.resolve() : transcript.publish(seg)),
+  };
   const liveActs = createRedisActsSource({ client: actsClient, meetingId });
 
   // ── 2b: launch the browser + wire join / capture / recording / speak (L4-gated). ──
@@ -187,7 +194,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
   let pipeline: Pipeline;
   let botPipeline: BotPipeline | null = null;
   let acts: ActsSource = liveActs;
-  const leaveRef: { fire: (reason: string) => void } = { fire: () => {} };  // /nobot → leave
+  const leaveRef: { fire: (reason: string) => void } = { fire: () => {} };  // /botstop → leave
   const recording = inv.recordingEnabled ? createBotRecordingSink({ inv, log: (m) => console.log(`[bot] ${m}`) }) : undefined;
   const speakerStreamConfig = speakerStreamConfigFromEnv(env);
   if (speakerStreamConfig) console.log(`[bot] speaker-stream tuning enabled: ${JSON.stringify(speakerStreamConfig)}`);
@@ -195,7 +202,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
   try {
     session = await launchBrowser(inv);                                   // L4 (O6/VM)
     join = createBrowserJoinDriver(session.page, inv);
-    botPipeline = createBotPipeline(inv, transcript, { config: speakerStreamConfig, onError: (e) => console.error(`[bot] pipeline fault: ${String(e)}`) });
+    botPipeline = createBotPipeline(inv, gatedTranscript, { config: speakerStreamConfig, onError: (e) => console.error(`[bot] pipeline fault: ${String(e)}`) });
     // Defer the page-side capture start to pipeline.start(): the orchestrator calls it AFTER
     // admission (orchestrator.ts:125), on the LIVE meeting page — where addInitScript has injected
     // window.VexaBrowserUtils and the participant <audio> elements exist. Starting it at launch ran
@@ -206,22 +213,50 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     // speaker, the wall clock is the timing (epoch seconds, like the audio lanes), and
     // `completed` is immediate — a chat line has no draft phase.
     let chatSeq = 0;
+    const sentByBot = new Set<string>();
+    const reply = (msg: string): void => {
+      sentByBot.add(msg);
+      void sendTeamsChatMessage(sess.page, msg).catch(() => {});
+    };
     const handleChat = (sender: string, text: string): void => {
-      const body = String(text || '');
-      // Opening the chat panel (for /nobot) exposes the thread's HISTORY, incl. Teams system
-      // lines ("Meeting ended", "Recording started", "… joined"). Don't record those as segments.
-      if (/^\s*(Meeting ended|Call ended|Recording (started|stopped)|Besprechung beendet|Aufzeichnung|.* (joined|left|beigetreten|hat die Besprechung verlassen)\.?)\s*$/i.test(body.trim())) return;
-      // Flexcon opt-out: anyone typing /nobot in the meeting chat evicts the bot.
-      if (/^\s*\/nobot\b/i.test(body)) {
-        console.log(`[bot] /nobot from "${sender}" — leaving meeting on request`);
-        leaveRef.fire('nobot_command');
-        return; // never record the command itself as a transcript segment
+      const line = String(text || '').trim();
+      // Never act on / record the bot's OWN greeting + replies (read back from the open panel).
+      if (sentByBot.has(line) || line === TEAMS_GREETING) return;
+      // Teams system lines exposed by the open chat panel are not transcript content.
+      if (/^(Meeting ended|Call ended|Recording (started|stopped)|Besprechung beendet|Aufzeichnung|.* (joined|left|beigetreten|hat die Besprechung verlassen)\.?)$/i.test(line)) return;
+      // Flexcon commands — line-start so a command NAMED in the greeting can't self-trigger.
+      const cmd = (line.match(/^\/(botstop|botstay|botpause|botresume|nobot)\b/i)?.[1] || '').toLowerCase();
+      if (cmd) {
+        switch (cmd) {
+          case 'botstop':
+          case 'nobot':
+            console.log(`[bot] /botstop from "${sender}" — leaving`);
+            reply('👋 Flexcon Meeting Assistent verlässt die Besprechung. Transkription gestoppt.');
+            setTimeout(() => leaveRef.fire('botstop_command'), 1500); // let the reply post first
+            break;
+          case 'botstay':
+            stayRef.stay = true;
+            console.log(`[bot] /botstay from "${sender}" — auto-leave disabled`);
+            reply('📌 Bleibe in der Besprechung, bis alle sie verlassen haben.');
+            break;
+          case 'botpause':
+            pauseRef.paused = true;
+            console.log(`[bot] /botpause from "${sender}" — transcription paused`);
+            reply('⏸️ Transkription pausiert. Mit /botresume fortsetzen.');
+            break;
+          case 'botresume':
+            pauseRef.paused = false;
+            console.log(`[bot] /botresume from "${sender}" — transcription resumed`);
+            reply('▶️ Transkription fortgesetzt.');
+            break;
+        }
+        return; // a command is never recorded as a transcript segment
       }
-      publishChat(sender, body);
+      publishChat(sender, String(text || ''));
     };
     const publishChat = (sender: string, text: string): void => {
       const nowMs = Date.now();
-      void transcript.publish({
+      void gatedTranscript.publish({
         segment_id: `${inv.connectionId ?? 'session'}:chat:${nowMs}:${chatSeq++}`,
         speaker: sender,
         speaker_key: `chat:${sender}`,
@@ -239,7 +274,15 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     // each failure surfaces LOUD via onFault (console with a full-fidelity serr(e)) instead of
     // throwing into the orchestrator's leave-on-fail backstop (which would hang the bot up).
     pipeline = createLivePipeline({
-      startCapture: () => startCaptureBridge(sess.page, inv, bp, undefined, handleChat),   // on the live meeting page
+      startCapture: async () => {
+        await startCaptureBridge(sess.page, inv, bp, undefined, handleChat);   // on the live meeting page
+        if (inv.platform === 'teams') {                                        // greet + advertise commands
+          sentByBot.add(TEAMS_GREETING);
+          void sendTeamsChatMessage(sess.page, TEAMS_GREETING)
+            .then((ok) => console.log(`[bot] greeting ${ok ? 'sent' : 'NOT sent (compose box not found)'}`))
+            .catch(() => {});
+        }
+      },
       startRecording: rec ? () => startRecording(sess.page, inv, rec) : undefined,          // MediaRecorder → recording.v1
       engine: bp,
       onFault: (stage, e) => {
@@ -254,7 +297,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
     // graceful acts 'leave' path a dashboard Stop takes. Arms only after admission + grace
     // (an auto-joined bot arrives BEFORE the meeting starts); see empty-room.ts.
     if (inv.platform === 'teams') {
-      acts = withEmptyRoomWatcher(acts, session.page, inv, (m) => console.log(`[bot] ${m}`));
+      acts = withEmptyRoomWatcher(acts, session.page, inv, (m) => console.log(`[bot] ${m}`), { stayRef });
     }
   } catch (e) {
     console.error(`[bot] browser launch/capture wiring failed — falling back to clean terminal failed: ${String(e)}`);

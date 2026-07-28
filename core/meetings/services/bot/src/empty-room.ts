@@ -89,7 +89,7 @@ export function withEmptyRoomWatcher(
   page: Page,
   inv: Invocation,
   log: (m: string) => void,
-  opts?: { graceMs?: number; pollMs?: number },
+  opts?: { graceMs?: number; pollMs?: number; stayRef?: { stay: boolean } },
 ): ActsSource {
   const graceMs = opts?.graceMs ?? DEFAULT_GRACE_MS;
   const pollMs = opts?.pollMs ?? POLL_MS;
@@ -104,6 +104,7 @@ export function withEmptyRoomWatcher(
       const timer = setInterval(() => {
         void (async () => {
           if (fired) return;
+          if (opts?.stayRef?.stay) { aloneSince = 0; return; }  // /botstay: never auto-leave
           let r: Reading;
           try { r = await readRoom(page); }
           catch { aloneSince = 0; return; }               // page not ready/navigating → unknown → reset

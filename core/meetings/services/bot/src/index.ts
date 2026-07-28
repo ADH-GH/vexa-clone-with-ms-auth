@@ -235,23 +235,23 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<number
         switch (cmd) {
           case 'botstop':
           case 'nobot':
-            console.log(`[bot] /botstop from "${sender}" — leaving`);
+            console.log(`[bot] /botstop by "${sender}" — leaving`);
             reply('👋 Flexcon Meeting Assistent verlässt die Besprechung. Transkription gestoppt.');
             setTimeout(() => leaveRef.fire('botstop_command'), 1500); // let the reply post first
             break;
           case 'botstay':
             stayRef.stay = true;
-            console.log(`[bot] /botstay from "${sender}" — auto-leave disabled`);
+            console.log(`[bot] /botstay by "${sender}" — auto-leave disabled`);
             reply('📌 Bleibe in der Besprechung, bis alle sie verlassen haben.');
             break;
           case 'botpause':
             pauseRef.paused = true;
-            console.log(`[bot] /botpause from "${sender}" — transcription paused`);
+            console.log(`[bot] /botpause by "${sender}" — transcription paused`);
             reply('⏸️ Transkription pausiert. Mit /botresume fortsetzen.');
             break;
           case 'botresume':
             pauseRef.paused = false;
-            console.log(`[bot] /botresume from "${sender}" — transcription resumed`);
+            console.log(`[bot] /botresume by "${sender}" — transcription resumed`);
             reply('▶️ Transkription fortgesetzt.');
             break;
         }

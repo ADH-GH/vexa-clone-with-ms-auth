@@ -91,6 +91,14 @@ spec:
               value: {{ .Values.meetingApi.minioSecure | default "false" | quote }}
             - name: LOG_LEVEL
               value: {{ .Values.meetingApi.logLevel | default "info" | quote }}
+            - name: VEXA_TEAMS_AUTHENTICATED
+              value: {{ .Values.meetingApi.teamsAuthenticated | default "" | quote }}
+            - name: VEXA_TEAMS_USERDATA_S3_PATH
+              value: {{ .Values.meetingApi.teamsUserdataS3Path | default "sessions/teams/automation" | quote }}
+            - name: VEXA_WAITING_ROOM_TIMEOUT_MS
+              value: {{ .Values.meetingApi.waitingRoomTimeoutMs | default "600000" | quote }}
+            - name: VEXA_EVERYONE_LEFT_TIMEOUT_MS
+              value: {{ .Values.meetingApi.everyoneLeftTimeoutMs | default "900000" | quote }}
             {{- with .Values.meetingApi.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

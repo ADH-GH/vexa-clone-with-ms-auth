@@ -19,6 +19,9 @@ is to fold this back upstream so any Vexa deployment can be Microsoft-ready.
 - ✅ **Session preserved** — strip `--incognito` for authenticated bots (it wiped the restored profile).
 - ✅ **Self-host auth path shippable** — AWS CLI + a `VEXA_MODE=login` VNC login entrypoint.
 - ✅ **Named speakers** — wired the Teams active-speaker detector that upstream shipped but never ran.
+- ✅ **German-grade STT + diarisation** (post-call) — German CT2 Whisper finetune + pyannote
+  community-1 diarisation turns fragmented hint-based speakers into clean speakers **mapped to real
+  names** (a 3-person meeting: 262 pseudo-speakers -> 4 named speakers).
 - ✅ **Empty-room auto-leave** — `left_alone` implemented via Teams' "Waiting for others to join…"
   stage banner (roster/audio signals go stale); leaves cleanly (hangup → exit 0).
 - ✅ **No false eviction** — removal now needs removal-specific wording + a DOM-presence check

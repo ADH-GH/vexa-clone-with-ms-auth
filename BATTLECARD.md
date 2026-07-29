@@ -49,8 +49,8 @@ speaker-attributed **German protocol** — automatically.
 - **This fork** (`vexa-clone-with-ms-auth`) — the Teams-ready, hardened bot + meeting-api.
 - **`diarizer`** ([ADH-GH/diarizer](https://github.com/ADH-GH/diarizer)) — standalone post-call diarization
   microservice (German CT2 Whisper + pyannote community-1).
-- **Flexcon post-call pipeline** — currently n8n; being consolidated into a **`vexa-flexcon-enhancements`**
-  container so it runs without n8n.
+- **Flexcon post-call pipeline** — packaged as the standalone **[Vexa-Flexcon-Meeting-Agent](https://github.com/ADH-GH/Vexa-Flexcon-Meeting-Agent)**
+  service (audio → speaker-named transcript → German protocol → delivery).
 
 ## Builders
 **Alf-David Heermann** ([@ADH-GH](https://github.com/ADH-GH), Flexcon IT GmbH & Co. KG) · **Claude**

@@ -359,6 +359,30 @@
    "default": "3600",
    "description": "#527: acked transcription_segments entries older than this are trimmed; an unread (un-acked) entry is NEVER trimmed regardless of age (the 2026-04-26 data-loss guard)",
    "targets": []
+  },
+  {
+   "key": "VEXA_TEAMS_AUTHENTICATED",
+   "class": "defaulted",
+   "default": "",
+   "description": "When \"true\", every Teams bot invocation is stamped with the signed-in automation@ session (restored from object storage) so the bot joins as a known org user and skips the lobby; empty = anonymous guest join (upstream default)."
+  },
+  {
+   "key": "VEXA_TEAMS_USERDATA_S3_PATH",
+   "class": "defaulted",
+   "default": "sessions/teams/automation",
+   "description": "Object-storage prefix of the persisted signed-in Teams browser profile the authenticated bot restores (the /browser-data suffix is appended by the bot)."
+  },
+  {
+   "key": "VEXA_WAITING_ROOM_TIMEOUT_MS",
+   "class": "defaulted",
+   "default": "600000",
+   "description": "Max time (ms) the bot waits in the Teams waiting room/lobby before giving up."
+  },
+  {
+   "key": "VEXA_EVERYONE_LEFT_TIMEOUT_MS",
+   "class": "defaulted",
+   "default": "900000",
+   "description": "Empty-room auto-leave: after this many ms alone (past the join grace), the bot hangs up and exits cleanly."
   }
  ],
  "capabilities": {

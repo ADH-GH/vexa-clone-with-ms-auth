@@ -21,7 +21,7 @@ from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from .ports import MaxBotsExceeded, MeetingRepo, QuotaExceeded, RuntimeClient, SpawnFailed, TranscriptionNotConfigured
-from .service import DuplicateMeeting, construct_meeting_url, request_bot
+from .service import DuplicateMeeting, construct_meeting_url, recording_default, request_bot
 
 
 def _resolve_recording_enabled(value: Optional[object]) -> bool:
@@ -30,7 +30,7 @@ def _resolve_recording_enabled(value: Optional[object]) -> bool:
     a bool is honored, a string is parsed (``"true"``/``"false"`` etc.), and any other type is a 422
     (NOT silently ``bool()``-coerced, which would turn the string ``"false"`` into ``True``)."""
     if value is None:
-        return os.getenv("RECORDING_ENABLED", "true").lower() == "true"
+        return recording_default()
     if isinstance(value, bool):
         return value
     if isinstance(value, str):

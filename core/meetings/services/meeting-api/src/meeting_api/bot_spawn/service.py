@@ -121,6 +121,17 @@ def _meeting_response(row: dict, *, sessions: Optional[list] = None) -> dict:
     }
 
 
+def recording_default() -> bool:
+    """The deployment's recording default (``RECORDING_ENABLED``, default ``true``).
+
+    Shared on purpose: EVERY spawn path must honour the same setting. The HTTP router resolved this
+    itself while the auto-join sweep passed nothing, so scheduled meetings silently fell back to the
+    ``recording_enabled=False`` parameter default and were never recorded — with recording off there is
+    no audio to diarise later, even though the deployment had RECORDING_ENABLED=true.
+    """
+    return os.getenv("RECORDING_ENABLED", "true").lower() == "true"
+
+
 async def request_bot(
     repo: MeetingRepo,
     runtime: RuntimeClient,

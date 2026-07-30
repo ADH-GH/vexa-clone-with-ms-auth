@@ -20,6 +20,7 @@ speaker-attributed **German protocol** — automatically.
 | **Self-host auth** | Unshippable (no aws CLI, no login entrypoint) | `VEXA_MODE=login` provisioning harness |
 | **Empty-room leave** | `everyoneLeftTimeout` configured but **never implemented** | **Live** — leaves via Teams' "waiting for others" banner (roster/audio signals proved unreliable) |
 | **Eviction** | False-positive: left live meetings ~1.5 s after joining | Fixed — removal-specific wording + DOM debounce |
+| **Recording on auto-join** | Scheduled auto-joins were **never recorded** (the sweep ignored `RECORDING_ENABLED`), so no post-call diarisation was possible | Both spawn paths honour one shared default — hands-free meetings record and diarise |
 | **Compact-mode drift** | Broad chat selector detached the roster | In-call-only selector keeps the full stage |
 
 ### Transcription quality

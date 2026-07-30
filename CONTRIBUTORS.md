@@ -55,4 +55,12 @@ Additional hardening on the Teams lane: compact-mode prevention (in-call-only ch
 language allow-list + hallucination phrase filter at the STT egress (Whisper silence artifacts), and
 STT-path diagnostics.
 
+7. **The auto-join sweep never recorded** — `bot_spawn/service.py:request_bot()` takes
+   `recording_enabled: bool = False`, and only the HTTP spawn path resolved the real value; the
+   scheduled auto-join sweep (`bot_spawn/auto_join.py`) passed nothing, so the parameter default won and
+   **every auto-joined meeting was silently never recorded — even with `RECORDING_ENABLED=true`**. Manual
+   "Send bot now" recorded, the hands-free path did not, and without audio no post-call diarisation is
+   possible at all. Fixed by extracting the deployment default into `service.recording_default()` and
+   having BOTH spawn paths use it.
+
 See `tools/vexa/fork-teams-auth/README.md` (in the Flexcon workbench) for the operating runbook.

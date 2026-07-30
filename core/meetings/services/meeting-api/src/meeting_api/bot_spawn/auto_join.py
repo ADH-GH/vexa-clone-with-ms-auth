@@ -27,7 +27,7 @@ from typing import Any, Awaitable, Callable, Optional
 
 from ..obs import log_event
 from .ports import MaxBotsExceeded, QuotaExceeded, SpawnFailed
-from .service import DuplicateMeeting, request_bot
+from .service import DuplicateMeeting, recording_default, request_bot
 
 # Sweep cadence/window env vocabulary (config.v1: all optional, sane defaults).
 DEFAULT_LEAD_S = 60          # AUTO_JOIN_LEAD_S — join this many seconds BEFORE scheduled_at
@@ -164,6 +164,10 @@ async def auto_join_tick(
                 webhook_url=ctx.get("webhook_url"),
                 webhook_secret=ctx.get("webhook_secret"),
                 webhook_events=ctx.get("webhook_events"),
+                # Without this the parameter default (False) wins and an auto-joined meeting is never
+                # recorded — so it can never be diarised either. The sweep must honour the deployment
+                # setting exactly like the HTTP spawn path does.
+                recording_enabled=recording_default(),
                 token_secret=token_secret,
                 redis_url=redis_url,
             )

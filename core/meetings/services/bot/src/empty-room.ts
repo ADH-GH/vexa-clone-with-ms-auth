@@ -8,13 +8,21 @@
  * "Stop bot" takes, so the whole graceful teardown (leave click → flush → terminal
  * lifecycle → exit 0) is reused, not reimplemented.
  *
- * Fail-safe by design:
- *  - ARMS only after admission + a grace period (default 5 min): an auto-joined bot
- *    arrives ~60s BEFORE the meeting starts — without the grace it would count the
- *    pre-start emptiness as "everyone left" and bail before anyone arrives.
- *  - Leaves only after `everyoneLeftTimeout` of CONTINUOUS alone-readings.
+ * Two lanes, because "everyone left" and "nobody ever came" are different situations:
+ *  - NO-SHOW lane (no human has EVER been seen): the short `everyoneLeftTimeout` must not
+ *    apply. A bot auto-joins ~2 min BEFORE the scheduled start, so the short timer would
+ *    end the meeting minutes after its start time — which is exactly when people are still
+ *    trickling in. Waits `noOneJoinedTimeout` (default 20 min) from admission instead.
+ *    Measured live: meeting 25 lost this way — bot left 7 min after the scheduled start,
+ *    the humans joined later, and the Meeting Agent's dedup guard then blocked any re-join.
+ *  - LEFT lane (a human WAS here): the original behaviour — grace (default 5 min) after
+ *    admission, then `everyoneLeftTimeout` of CONTINUOUS alone-readings.
  *  - An unreadable signal RESETS the alone-clock (never leave on unknown); the 4h
  *    backstop remains the ultimate guarantee.
+ *
+ * The lane switch reads the banner ONLY (see `present` below): the roster count and the
+ * live-track count both report presence in a provably empty room and would defeat the
+ * no-show lane on its first poll.
  *
  * Alone signals, in preference order (all logged each poll for calibration):
  *  1. Teams' own "Waiting for others to join…" / "You're the only one here" STAGE banner —
@@ -33,8 +41,9 @@ import type { Invocation } from './config.js';
 import type { ActsSource } from './ports.js';
 
 const POLL_MS = 10_000;
-const DEFAULT_GRACE_MS = 5 * 60_000;      // arm only after admission + 5 min (user rule)
-const DEFAULT_EVERYONE_LEFT_MS = 180_000; // if the invocation carries none
+const DEFAULT_GRACE_MS = 5 * 60_000;         // arm only after admission + 5 min (user rule)
+const DEFAULT_EVERYONE_LEFT_MS = 180_000;    // if the invocation carries none
+const DEFAULT_NO_ONE_JOINED_MS = 20 * 60_000; // nobody ever came: wait this long from admission
 
 interface Reading {
   admitted: boolean;
@@ -114,11 +123,13 @@ export function withEmptyRoomWatcher(
   const graceMs = opts?.graceMs ?? DEFAULT_GRACE_MS;
   const pollMs = opts?.pollMs ?? POLL_MS;
   const leaveAfterMs = inv.automaticLeave?.everyoneLeftTimeout ?? DEFAULT_EVERYONE_LEFT_MS;
+  const noShowAfterMs = inv.automaticLeave?.noOneJoinedTimeout ?? DEFAULT_NO_ONE_JOINED_MS;
   return {
     subscribe(handler) {
       const unsub = source.subscribe(handler);
       let admittedAt = 0;
       let aloneSince = 0;
+      let everSawHuman = false;
       let fired = false;
       let lastLog = 0;
       const timer = setInterval(() => {
@@ -131,7 +142,7 @@ export function withEmptyRoomWatcher(
           if (!r.admitted) { aloneSince = 0; return; }    // pre-join / lobby — not our phase
           if (!admittedAt) {
             admittedAt = Date.now();
-            log(`[EmptyRoom] admitted — arming in ${Math.round(graceMs / 1000)}s (everyoneLeftTimeout=${Math.round(leaveAfterMs / 1000)}s)`);
+            log(`[EmptyRoom] admitted — arming in ${Math.round(graceMs / 1000)}s (everyoneLeftTimeout=${Math.round(leaveAfterMs / 1000)}s, noOneJoinedTimeout=${Math.round(noShowAfterMs / 1000)}s)`);
           }
           const now = Date.now();
           // Teams' own "alone" banner is authoritative and wins over the flaky/stale heuristics
@@ -142,18 +153,40 @@ export function withEmptyRoomWatcher(
             : (r.liveTracks ?? 0) > 0 ? false
             : r.count !== null ? r.count <= 1
             : false;
+          // Which lane we are in hangs on ONE signal: Teams' banner, which it removes the
+          // instant a second participant joins. The other two candidates cannot carry this —
+          // meeting 25 read liveTracks=2 (phantom tracks that never tore down) and count=4
+          // (the People pane counts INVITED people) while the room was provably empty:
+          // −91 dB over the full recording. Either would have flipped the lane on an empty room.
+          const present = !r.aloneBanner;
+          if (present && !everSawHuman) {
+            everSawHuman = true;
+            log(`[EmptyRoom] first human seen after ${Math.round((now - admittedAt) / 1000)}s — no-show lane off, everyoneLeftTimeout active`);
+          }
           if (now - lastLog > 60_000) {
             lastLog = now;
-            log(`[EmptyRoom] count=${r.count ?? '?'} cand=${JSON.stringify(r.cand)} liveTracks=${r.liveTracks ?? '?'} banner=${r.aloneBanner} alone=${alone} armed=${now >= admittedAt + graceMs} aloneFor=${aloneSince ? Math.round((now - aloneSince) / 1000) : 0}s`);
+            log(`[EmptyRoom] count=${r.count ?? '?'} cand=${JSON.stringify(r.cand)} liveTracks=${r.liveTracks ?? '?'} banner=${r.aloneBanner} alone=${alone} everSawHuman=${everSawHuman} armed=${now >= admittedAt + graceMs} aloneFor=${aloneSince ? Math.round((now - aloneSince) / 1000) : 0}s waited=${Math.round((now - admittedAt) / 1000)}s`);
           }
-          if (now < admittedAt + graceMs) { aloneSince = 0; return; }  // grace: never leave early
           if (!alone) { aloneSince = 0; return; }
-          if (!aloneSince) aloneSince = now;
-          if (now - aloneSince >= leaveAfterMs) {
+          const leave = (reason: string, detail: string) => {
             fired = true;
             clearInterval(timer);
-            log(`[EmptyRoom] alone for ${Math.round((now - aloneSince) / 1000)}s (count=${r.count ?? '?'} liveTracks=${r.liveTracks ?? '?'}) — leaving (left_alone)`);
+            log(`[EmptyRoom] ${detail} (count=${r.count ?? '?'} liveTracks=${r.liveTracks ?? '?'}) — leaving (${reason})`);
             void Promise.resolve(handler({ action: 'leave' } as Act)).catch((e) => log(`[EmptyRoom] leave act rejected: ${String(e)}`));
+          };
+          // NO-SHOW lane: nobody has ever been here, so there is no "everyone left" to time.
+          // Sit out the full noOneJoinedTimeout from admission — latecomers are the norm, and
+          // once the bot leaves, the meeting is gone for good (the Vexa row completes).
+          if (!everSawHuman) {
+            const waitedMs = now - admittedAt;
+            if (waitedMs < noShowAfterMs) return;
+            leave('no_show', `no one ever joined in ${Math.round(waitedMs / 1000)}s`);
+            return;
+          }
+          if (now < admittedAt + graceMs) { aloneSince = 0; return; }  // grace: never leave early
+          if (!aloneSince) aloneSince = now;
+          if (now - aloneSince >= leaveAfterMs) {
+            leave('left_alone', `alone for ${Math.round((now - aloneSince) / 1000)}s`);
           }
         })();
       }, pollMs);

@@ -312,6 +312,10 @@ async def request_bot(
             # nothing consumed. Defaults mirror upstream.
             "waitingRoomTimeout": int(os.environ.get("VEXA_WAITING_ROOM_TIMEOUT_MS", "600000")),
             "everyoneLeftTimeout": int(os.environ.get("VEXA_EVERYONE_LEFT_TIMEOUT_MS", "900000")),
+            # noOneJoinedTimeout applies only while NO human has ever been in the room. It must be
+            # far longer than everyoneLeftTimeout: an auto-joined bot arrives before the scheduled
+            # start, so the short timer would end the meeting while people are still joining.
+            "noOneJoinedTimeout": int(os.environ.get("VEXA_NO_ONE_JOINED_TIMEOUT_MS", "1200000")),
         },
     )
 

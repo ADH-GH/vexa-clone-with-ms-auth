@@ -36,7 +36,7 @@
  *     __vexaCapturedRemoteAudioStreams): a POSITIVE 'someone is here' signal only.
  */
 import type { Page } from '@vexa/remote-browser';
-import type { Act } from './contracts.js';
+import type { Act, CompletionReason } from './contracts.js';
 import type { Invocation } from './config.js';
 import type { ActsSource } from './ports.js';
 
@@ -112,7 +112,7 @@ async function readRoom(page: Page): Promise<Reading> {
   });
 }
 
-/** Wrap an ActsSource so a Teams empty room injects `{action:'leave'}` after the timeouts. */
+/** Wrap an ActsSource so a Teams empty room injects a `leave` (startup_alone / left_alone) after the timeouts. */
 export function withEmptyRoomWatcher(
   source: ActsSource,
   page: Page,
@@ -168,11 +168,14 @@ export function withEmptyRoomWatcher(
             log(`[EmptyRoom] count=${r.count ?? '?'} cand=${JSON.stringify(r.cand)} liveTracks=${r.liveTracks ?? '?'} banner=${r.aloneBanner} alone=${alone} everSawHuman=${everSawHuman} armed=${now >= admittedAt + graceMs} aloneFor=${aloneSince ? Math.round((now - aloneSince) / 1000) : 0}s waited=${Math.round((now - admittedAt) / 1000)}s`);
           }
           if (!alone) { aloneSince = 0; return; }
-          const leave = (reason: string, detail: string) => {
+          // The reason rides the act into the terminal lifecycle event, so `startup_alone` reaches
+          // the API and stays distinguishable from a user's Stop (which is 'stopped'). Callers
+          // downstream — the Meeting Agent's dedup guard above all — key on exactly that difference.
+          const leave = (reason: CompletionReason, detail: string) => {
             fired = true;
             clearInterval(timer);
             log(`[EmptyRoom] ${detail} (count=${r.count ?? '?'} liveTracks=${r.liveTracks ?? '?'}) — leaving (${reason})`);
-            void Promise.resolve(handler({ action: 'leave' } as Act)).catch((e) => log(`[EmptyRoom] leave act rejected: ${String(e)}`));
+            void Promise.resolve(handler({ action: 'leave', reason } as Act)).catch((e) => log(`[EmptyRoom] leave act rejected: ${String(e)}`));
           };
           // NO-SHOW lane: nobody has ever been here, so there is no "everyone left" to time.
           // Sit out the full noOneJoinedTimeout from admission — latecomers are the norm, and
@@ -180,7 +183,7 @@ export function withEmptyRoomWatcher(
           if (!everSawHuman) {
             const waitedMs = now - admittedAt;
             if (waitedMs < noShowAfterMs) return;
-            leave('no_show', `no one ever joined in ${Math.round(waitedMs / 1000)}s`);
+            leave('startup_alone', `no one ever joined in ${Math.round(waitedMs / 1000)}s`);
             return;
           }
           if (now < admittedAt + graceMs) { aloneSince = 0; return; }  // grace: never leave early

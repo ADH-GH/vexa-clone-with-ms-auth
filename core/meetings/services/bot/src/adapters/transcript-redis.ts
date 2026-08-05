@@ -1,14 +1,17 @@
 /**
  * transcript.v1 egress ADAPTER — redis stream + pub/sub.
  *
- * Implements the `TranscriptSink` port. On each confirmed segment the engine pushes, this
- * fans out to BOTH legs of the 0.11 transcript transport:
+ * Implements the `TranscriptSink` port. Each segment the engine pushes fans out to the two legs
+ * of the 0.11 transcript transport — but they carry different things:
  *
  *   1. STREAM  `transcription_segments`  (XADD * { payload })  — the durable feed the collector
  *      [Py] consumes. `payload` is JSON `{ type: 'transcription', ...segment }` (the segment
  *      fields spread alongside the discriminator, per the 0.11 collector wire format).
+ *      **CONFIRMED segments only** (`completed !== false`) — drafts are not a transcript, see
+ *      the note in `publish()`.
  *   2. PUB/SUB `tc:meeting:{meetingId}:mutable`  — the live mutable channel the gateway forwards
  *      to the dashboard. Message is JSON `{ type: 'transcript', meeting: { id }, segment }`.
+ *      **Every** segment, drafts included — that is what "mutable" means.
  *
  * L3-testable via an INJECTED minimal `client` ({ xAdd, publish }) — no real redis. The factory
  * `redisClientFrom(url)` wraps node-redis v4 into that minimal interface for the composition root.
@@ -48,17 +51,37 @@ export function createRedisTranscriptSink(opts: RedisTranscriptSinkOptions): Tra
   const channel = mutableChannel(meetingId);
 
   async function publish(segment: TranscriptSegment): Promise<void> {
-    // Leg 1: durable stream → collector. The collector's `ingest` REQUIRES the envelope
-    // `{ type, meeting_id, segments:[…] }` — meeting_id to route the segment to its meeting, a
-    // `segments` LIST to drain (a payload missing either is silently dropped: ingest.py `return 0`).
-    // Emit that, not a flat segment, so the bot's transcripts actually reach the collector. (The
-    // mock-bot L3 lane caught the flat form: O6 read the raw stream directly and never exercised the collector.)
-    const payload = JSON.stringify({
-      type: 'transcription', meeting_id: meetingId, native_meeting_id: nativeMeetingId, segments: [segment],
-    });
-    await client.xAdd(TRANSCRIPTION_STREAM, '*', { payload });
+    // Leg 1: durable stream → collector. CONFIRMED SEGMENTS ONLY.
+    //
+    // The mixed lane publishes a bundle per pass: newly confirmed segments (`turn:N:seq`,
+    // completed=true) plus the still-forming LocalAgreement tail (`turn:N:pI`, completed=false).
+    // The tail is a live-UI affordance — the next pass replaces it. It must not become a row.
+    // It used to: the collector persists whatever arrives here, and because a draft's id differs
+    // from the final's, the db-writer's ON CONFLICT (meeting_id, segment_id) could never collapse
+    // them. Measured on a 5-minute meeting: 128 stored rows, 44 of them drafts (34%), every single
+    // one with a final twin, 25 pairs where the draft held the earlier and worse hypothesis, and
+    // 13 of the 14 rows with an unresolved `seg_N` speaker were drafts (a draft is published before
+    // the name resolves, and the later rename can't find it under its own id). The transcript read
+    // back every sentence twice, once attributed and once not.
+    //
+    // Nothing is lost: a turn that closes with nothing confirmed has its tail PROMOTED to
+    // `turn:N:i` with completed=true (chunked-transcriber `closeOut`, the "never lose a turn"
+    // branch) — which is why all 44 drafts had a twin. A consumer that wants the live drafts
+    // subscribes to leg 2, which is exactly what that channel is for.
+    if (segment.completed !== false) {
+      // The collector's `ingest` REQUIRES the envelope `{ type, meeting_id, segments:[…] }` —
+      // meeting_id to route the segment to its meeting, a `segments` LIST to drain (a payload
+      // missing either is silently dropped: ingest.py `return 0`). Emit that, not a flat segment,
+      // so the bot's transcripts actually reach the collector. (The mock-bot L3 lane caught the
+      // flat form: O6 read the raw stream directly and never exercised the collector.)
+      const payload = JSON.stringify({
+        type: 'transcription', meeting_id: meetingId, native_meeting_id: nativeMeetingId, segments: [segment],
+      });
+      await client.xAdd(TRANSCRIPTION_STREAM, '*', { payload });
+    }
 
-    // Leg 2: live mutable channel → gateway → dashboard.
+    // Leg 2: live mutable channel → gateway → dashboard. Drafts DO belong here — this is the
+    // mutable view, and withholding them would bring back the "vanishing transcript" flicker.
     const msg = JSON.stringify({ type: 'transcript', meeting: { id: meetingId }, segment });
     await client.publish(channel, msg);
   }

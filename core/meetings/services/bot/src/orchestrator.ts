@@ -97,7 +97,7 @@ export function createOrchestrator(inv: Invocation, deps: OrchestratorDeps) {
   // acts.v1 dispatch. `leave` ends the run; reconfigure + voice acts are handled by the
   // live pipeline adapter (no-op for the machine; voice agent is DEFERRED this increment).
   async function handle(act: Act): Promise<void> {
-    if (act.action === 'leave') signalEnd?.('stopped');
+    if (act.action === 'leave') signalEnd?.(act.reason ?? 'stopped');
   }
 
   async function run(opts: RunOptions = {}): Promise<MeetingResult> {

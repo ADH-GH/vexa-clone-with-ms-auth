@@ -164,7 +164,11 @@ function createMixedBotPipeline(
         // ONE atomic bundle: newly-confirmed (persisted) + the surviving pending tail.
         publish: (speaker, confirmed, pending) => { publish(speaker, confirmed, true); publish(speaker, pending, false); },
         publishPending: (speaker, segments) => publish(speaker, segments, false),
-        clearPending: () => { /* the bot's transcript.v1 egress is append-only; drafts self-replace by id */ },
+        // Drafts never become rows (the redis sink keeps them off the durable leg), and on the live
+        // channel the next bundle replaces the speaker's pending block — so there is nothing to clear.
+        // NB they do NOT "self-replace by id": a draft's `turn:N:pI` never collides with the final's
+        // `turn:N:seq`, which is exactly why persisting them duplicated every utterance.
+        clearPending: () => { /* nothing to undo: drafts are live-only */ },
         rename: (_oldSpeaker, newSpeaker, segments) => publish(newSpeaker, segments, true),
         language,
         onError,

@@ -73,7 +73,10 @@ export function canTransition(from: BotStatus, to: BotStatus): boolean {
 
 /** A control-plane → bot command. Discriminated by `action` (acts.v1 `#/$defs/Act`). */
 export type Act =
-  | { action: 'leave' }
+  // `reason` is for SYNTHETIC leaves injected in-process (empty-room watcher, /nobot): it decides
+  // the terminal completion_reason. Omitted — as on every leave that arrives over acts.v1 — the
+  // run ends as 'stopped', the attributable terminal of a user-requested stop.
+  | { action: 'leave'; reason?: CompletionReason }
   | { action: 'reconfigure'; language?: string | null; task?: string | null; allowedLanguages?: string[] }
   | { action: 'speak'; text: string; voice?: string }
   | { action: 'speak_audio'; url?: string; audioBase64?: string }

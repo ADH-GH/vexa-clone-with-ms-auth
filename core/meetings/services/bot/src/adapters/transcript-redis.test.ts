@@ -86,6 +86,43 @@ async function main(): Promise<void> {
     check('publish: nested segment is transcript.v1-valid', !!validateSeg(msg.segment), ajv.errorsText(validateSeg.errors));
   }
 
+  // ── a DRAFT (completed:false) rides the live leg ONLY ──
+  // The mixed lane's LocalAgreement tail (`turn:N:pI`) is a replaceable preview. Persisting it
+  // duplicated every utterance in the stored transcript — once confirmed, once as an unattributed
+  // draft — because the draft's id never collides with the final's under the db-writer's upsert.
+  {
+    const { client, xadds, pubs } = fakeClient();
+    const sink = createRedisTranscriptSink({ client, meetingId: 42 });
+    const draft: TranscriptSegment = { ...seg, segment_id: 'turn:7:p0', completed: false };
+    await sink.publish(draft);
+
+    check('draft: NOT XADDed to the durable stream', xadds.length === 0, `${xadds.length} xAdd(s)`);
+    check('draft: still PUBLISHed on the live mutable channel', pubs.length === 1, String(pubs.length));
+    const dmsg = JSON.parse(pubs[0]!.message) as { segment: TranscriptSegment };
+    check('draft: live segment carried verbatim', JSON.stringify(dmsg.segment) === JSON.stringify(draft));
+  }
+
+  // ── the confirmed twin of that turn DOES reach the durable stream ──
+  {
+    const { client, xadds, pubs } = fakeClient();
+    const sink = createRedisTranscriptSink({ client, meetingId: 42 });
+    await sink.publish({ ...seg, segment_id: 'turn:7:p0', completed: false });   // draft first
+    await sink.publish({ ...seg, segment_id: 'turn:7:0', completed: true });     // then its final
+    check('turn: exactly one row reaches the collector', xadds.length === 1, String(xadds.length));
+    const only = (JSON.parse(xadds[0]!.fields.payload).segments as Array<Record<string, unknown>>)[0];
+    check('turn: the row is the CONFIRMED one', only?.segment_id === 'turn:7:0', String(only?.segment_id));
+    check('turn: both were seen live', pubs.length === 2, String(pubs.length));
+  }
+
+  // ── a segment with no `completed` flag still persists (other lanes / legacy) ──
+  {
+    const { client, xadds } = fakeClient();
+    const sink = createRedisTranscriptSink({ client, meetingId: 42 });
+    const { completed: _drop, ...noFlag } = seg;
+    await sink.publish(noFlag as TranscriptSegment);
+    check('no completed flag: still XADDed (absence is not a draft)', xadds.length === 1, String(xadds.length));
+  }
+
   // ── string meetingId (self-host fallback) → channel still well-formed ──
   {
     const { client, pubs } = fakeClient();
